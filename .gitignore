@@ -1,0 +1,48 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# C++ / CMake
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+*.whl
+.venv/
+venv/
+
+# PyTorch
+*.pt
+*.pth
+*.onnx
+*.mlpackage
+*.mlmodel
+
+# Datasets — generated, not committed
+datasets/images/
+datasets/annotations/
+
+# LDraw parts library — downloaded, not committed
+ldraw/
+
+# Rendered output
+renders/
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
