@@ -27,7 +27,8 @@ The dominant dataset for LEGO part classification. Part of a series of
 - CC BY 4.0
 - Paper: https://www.nature.com/articles/s41597-023-02682-2
 - Data: MostWiedzy repository (multiple DOIs, ~6GB+ total)
-- Kaggle mirror: https://www.kaggle.com/datasets/marwin1665/synthetic-lego-images-images22
+- Note: The Kaggle dataset at marwin1665/synthetic-lego-images-images22
+  is synthetic renders only, not a mirror of the real photos.
 
 TODO: Download, verify real vs synthetic split, confirm class count
 matches our target part list.
