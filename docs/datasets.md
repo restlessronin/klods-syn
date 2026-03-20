@@ -317,33 +317,34 @@ Datasets not yet publicly available but worth monitoring.
 
 Evaluated and rejected. Preserved here to avoid re-evaluation.
 
-| Dataset                                            | Reason                                                                                                                  |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| B200C LEGO Classification (Kaggle)                 | Synthetic renders only                                                                                                  |
-| B200 LEGO Detection (Kaggle)                       | Synthetic renders only                                                                                                  |
-| Synthetic LEGO Images / Images22 (Kaggle)          | Synthetic renders only                                                                                                  |
-| pvrancx/legobricks (HuggingFace)                   | Synthetic LDraw renders only                                                                                            |
-| Lego EMMET B200 (Roboflow)                         | Synthetic from Kaggle                                                                                                   |
-| korra-pickell/LEGO-Classification-Dataset (GitHub) | Machine-generated synthetic                                                                                             |
-| Biggest LEGO Dataset (Reddit/Kaggle)               | Blender synthetic renders                                                                                               |
-| LEGO-Parts-3D (GitHub)                             | 3D model files (.ldraw/.obj), not photos                                                                                |
-| Daniel West sorting machine (~200K images)         | Not publicly released                                                                                                   |
-| Theiner et al. real test set (~300 images)         | Not separately downloadable                                                                                             |
-| Kaggle: LEGO Set Recognition                       | Box/packaging images, not parts                                                                                         |
-| HuggingFace: lego-set-classification               | Text metadata only, no images                                                                                           |
-| Lego Product Dataset (Zenodo)                      | Product metadata, no images                                                                                             |
-| Rebrickable / BrickLink — Element & Photo images   | ToS prohibits ML use; not available for bulk download. (LDraw renders and CSV metadata listed separately in Category C) |
-| Flickr Creative Commons "lego"                     | Not a versioned dataset; requires manual curation                                                                       |
-| Google Image Search "lego"                         | Copyright issues, unfiltered noise                                                                                      |
-| Image2Lego (Papers With Code)                      | Research paper, no released photo dataset                                                                               |
-| RebrickNet training frames (Rebrickable)           | Not available for bulk download; privacy and bandwidth restrictions                                                     |
-| York University LEGO Dataset (Brouhani)            | Synthetic only; designed for dataset bias research                                                                      |
-| LEGO-Dataset (bolinlai / Ego4D)                    | Egocentric action generation dataset, not part identification                                                           |
-| Joost Hazelzet LEGO Bricks                         | Rendered in Autodesk Maya and Blender; synthetic only                                                                   |
-| Mantas Gribulis Dataset                            | 100% synthetic; used to demonstrate sim-to-real transfer                                                                |
-| Lego-Data-Analysis (kduvvuri1)                     | CSV metadata/history only; no image data                                                                                |
-| ShanghaiTech Anomaly                               | Generic surveillance dataset; unrelated to LEGO                                                                         |
-| Sphero Tracking Dataset                            | Tracks Sphero robots, not LEGO parts                                                                                    |
+| Dataset                                                 | Reason                                                                                                                      |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| B200C LEGO Classification (Kaggle)                      | Synthetic renders only                                                                                                      |
+| B200 LEGO Detection (Kaggle)                            | Synthetic renders only                                                                                                      |
+| Synthetic LEGO Images / Images22 (Kaggle)               | Synthetic renders only                                                                                                      |
+| pvrancx/legobricks (HuggingFace)                        | Synthetic LDraw renders only                                                                                                |
+| Lego EMMET B200 (Roboflow)                              | Synthetic from Kaggle                                                                                                       |
+| korra-pickell/LEGO-Classification-Dataset (GitHub)      | Machine-generated synthetic                                                                                                 |
+| Biggest LEGO Dataset (Reddit/Kaggle)                    | Blender synthetic renders                                                                                                   |
+| LEGO-Parts-3D (GitHub)                                  | 3D model files (.ldraw/.obj), not photos                                                                                    |
+| Daniel West sorting machine (~200K images)              | Not publicly released                                                                                                       |
+| Theiner et al. real test set (~300 images)              | Not separately downloadable                                                                                                 |
+| Kaggle: LEGO Set Recognition                            | Box/packaging images, not parts                                                                                             |
+| HuggingFace: lego-set-classification                    | Text metadata only, no images                                                                                               |
+| Lego Product Dataset (Zenodo)                           | Product metadata, no images                                                                                                 |
+| Rebrickable / BrickLink — Element & Photo images        | ToS prohibits ML use; not available for bulk download. (LDraw renders and CSV metadata listed separately in Category C)     |
+| Flickr Creative Commons "lego"                          | Not a versioned dataset; requires manual curation                                                                           |
+| Google Image Search "lego"                              | Copyright issues, unfiltered noise                                                                                          |
+| Image2Lego (Papers With Code)                           | Research paper, no released photo dataset                                                                                   |
+| RebrickNet training frames (Rebrickable)                | Not available for bulk download; privacy and bandwidth restrictions                                                         |
+| York University LEGO Dataset (Brouhani)                 | Synthetic only; designed for dataset bias research                                                                          |
+| LEGO-Dataset (bolinlai / Ego4D)                         | Egocentric action generation dataset, not part identification                                                               |
+| Joost Hazelzet LEGO Bricks                              | Rendered in Autodesk Maya and Blender; synthetic only                                                                       |
+| Mantas Gribulis Dataset                                 | 100% synthetic; used to demonstrate sim-to-real transfer                                                                    |
+| Lego-Data-Analysis (kduvvuri1)                          | CSV metadata/history only; no image data                                                                                    |
+| ShanghaiTech Anomaly                                    | Generic surveillance dataset; unrelated to LEGO                                                                             |
+| Sphero Tracking Dataset                                 | Tracks Sphero robots, not LEGO parts                                                                                        |
+| LegoLAS sorting machine (THI Ingolstadt, LegoAS/LegoAS) | Dataset not publicly released; wiki documents ~18K images across 243 classes from bachelor theses but no download available |
 
 ---
 
