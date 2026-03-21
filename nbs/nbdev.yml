@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "klods-syn"
+  site-url: "https://restlessronin.github.io/klods-syn"
+  description: ""
+  repo-branch: main
+  repo-url: "https://github.com/restlessronin/klods-syn"

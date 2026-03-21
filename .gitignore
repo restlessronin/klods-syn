@@ -46,3 +46,20 @@ renders/
 # OS
 .DS_Store
 Thumbs.db
+
+# Notebooks — md is source of truth
+nbs/*.ipynb
+nbs/.ipynb_checkpoints/
+
+# nbdev generated
+_docs/
+_proc/
+klods_syn/_modidx.py
+
+# Data
+data/
+
+# Large result files
+results/**/*.npy
+results/**/*.pkl
+!results/**/*.json

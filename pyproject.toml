@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "klods-syn"
+dynamic = ["version"]
+description = "Computer vision models and synthetic training data for LEGO brick recognition"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "restlessronin", email = "88921269+restlessronin@users.noreply.github.com" },
+]
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "timm>=1.0",
+    "Pillow",
+    "numpy",
+    "scikit-learn",
+]
+
+[project.urls]
+Repository = "https://github.com/restlessronin/klods-syn"
+Documentation = "https://restlessronin.github.io/klods-syn/"
+
+[project.entry-points.nbdev]
+klods_syn = "klods_syn._modidx:d"
+
+[tool.setuptools.dynamic]
+version = { attr = "klods_syn.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["klods_syn"]
+
+[tool.nbdev]
+
+[dependency-groups]
+dev = [
+    "nbdev>=3",
+    "jupyterlab",
+    "jupytext",
+    "ipykernel",
+    "tqdm",
+    "matplotlib",
+    "blacken-docs",
+]
+
+[tool.jupytext]
+formats = "ipynb,md"
