@@ -7,7 +7,7 @@ jupyter:
       format_version: '1.3'
       jupytext_version: 1.19.1
   kernelspec:
-    display_name: Python 3
+    display_name: Python 3 (ipykernel)
     language: python
     name: python3
 ---
@@ -59,7 +59,7 @@ DEVICE = (
     else "cuda" if torch.cuda.is_available() else "cpu"
 )
 BATCH_SIZE = 64
-NUM_WORKERS = 4
+NUM_WORKERS = 0
 TEST_SPLIT = 0.3
 RESULTS_DIR = Path("../results/baseline")
 
@@ -215,10 +215,10 @@ for load_fn in BACKBONES:
     train_dataset = LegoDataset(train_paths, np.array(train_labels), transform)
     test_dataset = LegoDataset(test_paths, np.array(test_labels), transform)
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS, pin_memory=True
+        train_dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS
     )
     test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS, pin_memory=True
+        test_dataset, batch_size=BATCH_SIZE, num_workers=NUM_WORKERS
     )
 
     t0 = time.time()
@@ -229,6 +229,17 @@ for load_fn in BACKBONES:
     print(f"Embedding extraction: {extraction_time:.1f}s")
     print(f"Embedding dim: {train_emb.shape[1]}")
 
+    # Cache embeddings
+    emb_dir = RESULTS_DIR / "embeddings"
+    emb_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = name.replace(" ", "_").replace("/", "_")
+    np.savez(
+        emb_dir / f"{safe_name}.npz",
+        train_emb=train_emb,
+        train_lab=train_lab,
+        test_emb=test_emb,
+        test_lab=test_lab,
+    )
     results = evaluate_knn(train_emb, train_lab, test_emb, test_lab, n_classes)
     results["embedding_dim"] = int(train_emb.shape[1])
     results["extraction_time_s"] = round(extraction_time, 1)
@@ -267,6 +278,59 @@ for name, res in all_results["backbones"].items():
         f"{res.get('top1_k5', 0):<15.4f} "
         f"{res.get('top5_k5', 0):<15.4f}"
     )
+```
+
+## Threshold analysis
+
+Rejection threshold for zero-false-positive operation: accept a
+classification only if the nearest-neighbor cosine distance is below
+a threshold. Rejected bricks recirculate for another pass.
+```python
+from sklearn.metrics import pairwise_distances
+
+
+def load_embeddings(name: str, results_dir: Path = RESULTS_DIR) -> dict:
+    """Load cached embeddings for a backbone."""
+    safe_name = name.replace(" ", "_").replace("/", "_")
+    path = results_dir / "embeddings" / f"{safe_name}.npz"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No cached embeddings at {path}. Run extraction first."
+        )
+    data = np.load(path)
+    return {k: data[k] for k in data.files}
+```
+```python
+name = "DINOv2 ViT-S/14"
+emb = load_embeddings(name)
+train_emb, train_lab = emb["train_emb"], emb["train_lab"]
+test_emb, test_lab = emb["test_emb"], emb["test_lab"]
+
+dists = pairwise_distances(test_emb, train_emb, metric="cosine")
+nn_indices = dists.argmin(axis=1)
+nn_dists = dists[np.arange(len(test_emb)), nn_indices]
+nn_preds = train_lab[nn_indices]
+correct = nn_preds == test_lab
+
+print(
+    f"Correct   — mean dist: {nn_dists[correct].mean():.4f}, "
+    f"95th pct: {np.percentile(nn_dists[correct], 95):.4f}"
+)
+print(
+    f"Incorrect — mean dist: {nn_dists[~correct].mean():.4f}, "
+    f"5th pct: {np.percentile(nn_dists[~correct], 5):.4f}"
+)
+```
+```python
+print(f"\n{'Threshold':<12} {'Accepted':<12} {'Accuracy':<12} {'Rejected %':<12}")
+print("-" * 48)
+for t in np.arange(0.05, 0.50, 0.05):
+    accepted = nn_dists <= t
+    if accepted.sum() == 0:
+        continue
+    acc = (nn_preds[accepted] == test_lab[accepted]).mean()
+    rej = 1 - accepted.mean()
+    print(f"{t:<12.2f} {accepted.sum():<12} {acc:<12.4f} {rej:<12.2%}")
 ```
 
 ```python
