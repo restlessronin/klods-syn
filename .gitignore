@@ -54,7 +54,6 @@ nbs/.ipynb_checkpoints/
 # nbdev generated
 _docs/
 _proc/
-klods_syn/_modidx.py
 
 # Data
 data/
@@ -63,3 +62,5 @@ data/
 results/**/*.npy
 results/**/*.pkl
 !results/**/*.json
+
+klods_syn/
