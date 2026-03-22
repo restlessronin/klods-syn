@@ -63,4 +63,5 @@ results/**/*.npy
 results/**/*.pkl
 !results/**/*.json
 
-klods_syn/
+klods_syn
+results
