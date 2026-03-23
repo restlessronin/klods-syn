@@ -59,7 +59,7 @@ annotation format and brick type overlap with our target list.
 - ~1,800 real photos of piles with 1–10 bricks per image
 - 85 distinct part types, multi-label annotations per image
 - Semi-controlled household-style setups
-- CC0 / public domain
+- CC BY 4.0
 - https://zenodo.org/records/3901857
 
 Unique value: only dataset with multi-label pile annotations. Useful

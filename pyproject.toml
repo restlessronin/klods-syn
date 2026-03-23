@@ -19,6 +19,8 @@ dependencies = [
     "Pillow",
     "numpy",
     "scikit-learn",
+    "kagglehub",
+    "pandas",
 ]
 
 [project.urls]

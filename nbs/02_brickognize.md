@@ -62,9 +62,7 @@ for p in sorted(extract_dir.rglob("*"))[:30]:
 ## Inspect COCO annotations
 
 ```python
-json_files = sorted(
-    p for p in extract_dir.rglob("*.json") if "__MACOSX" not in str(p)
-)
+json_files = sorted(p for p in extract_dir.rglob("*.json") if "__MACOSX" not in str(p))
 print(f"Found {len(json_files)} annotation file(s):")
 for jf in json_files:
     print(f"  {jf.relative_to(extract_dir)}")
@@ -152,9 +150,7 @@ for name, coco in cocos.items():
                         cat_name.get(a["category_id"], "?"),
                         fontsize=6,
                         color="lime",
-                        bbox=dict(
-                            boxstyle="round,pad=0.1", fc="black", alpha=0.7
-                        ),
+                        bbox=dict(boxstyle="round,pad=0.1", fc="black", alpha=0.7),
                     )
         ax.axis("off")
     plt.tight_layout()
