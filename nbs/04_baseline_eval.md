@@ -34,7 +34,10 @@ from klods_syn.data import RESULTS_DIR, BACKBONES
 ```python
 EMB_DIR = RESULTS_DIR / "embeddings"
 K_VALUES = [1, 3, 5]
-BACKBONE_NAMES = ["ConvNeXt_V2_Tiny", "DINOv2_ViT-S_14", "EfficientNet-B0"]
+from klods_syn.data import BACKBONES
+
+# Dynamically get backbone names from the loader functions
+BACKBONE_NAMES = [load_fn()[2] for load_fn in BACKBONES]  # index 2 = name string
 EVAL_DATASETS = ["gdansk_test", "brickognize", "paco_garcia"]
 ```
 
@@ -123,11 +126,32 @@ def knn_top_k_scores(
 ## Run evaluation
 
 ```python
+RESULTS_CSV = RESULTS_DIR / "cross_domain_knn_results.csv"
+
+existing_df = None
+if RESULTS_CSV.exists():
+    try:
+        existing_df = pd.read_csv(RESULTS_CSV)
+        print(
+            f"Loaded {len(existing_df)} existing evaluation results from {RESULTS_CSV.name}"
+        )
+    except Exception as e:
+        print(
+            f"Warning: Could not load {RESULTS_CSV.name}: {e}. Computing all from scratch."
+        )
+        existing_df = None
+
+computed = set()
 all_results = []
+
+if existing_df is not None:
+    all_results = existing_df.to_dict("records")
+    for _, row in existing_df.iterrows():
+        computed.add((row["backbone"], row["eval_dataset"], row["metric"]))
 
 for bb in BACKBONE_NAMES:
     if bb not in train_cache:
-        print(f"Skipping {bb} — no train embeddings")
+        print(f"Skipping {bb} — no training embeddings available")
         continue
     train_emb = train_cache[bb]["emb"]
     train_labels = train_cache[bb]["labels"]
@@ -140,19 +164,30 @@ for bb in BACKBONE_NAMES:
         test_emb = eval_cache[key]["emb"]
         test_labels = eval_cache[key]["labels"]
 
+        missing_metrics = []
+        for metric in ["k=1 top-1", "k=3 top-1", "k=5 top-1", "top-5 retrieval"]:
+            if (bb, ds, metric) not in computed:
+                missing_metrics.append(metric)
+        if not missing_metrics:
+            print(f"Skipping already computed: {bb} / {ds}")
+            continue
+        print(
+            f"Computing missing metrics for {bb} / {ds}: {', '.join(missing_metrics)}"
+        )
         scores = knn_top_k_scores(
             train_emb, train_labels, test_emb, test_labels, K_VALUES
         )
         for metric, value in scores.items():
-            all_results.append(
-                {
-                    "backbone": bb,
-                    "eval_dataset": ds,
-                    "metric": metric,
-                    "accuracy": value,
-                }
-            )
-        print(f"{bb} / {ds}: {scores}")
+            if (bb, ds, metric) not in computed:
+                all_results.append(
+                    {
+                        "backbone": bb,
+                        "eval_dataset": ds,
+                        "metric": metric,
+                        "accuracy": value,
+                    }
+                )
+                computed.add((bb, ds, metric))
 
 results_df = pd.DataFrame(all_results)
 ```

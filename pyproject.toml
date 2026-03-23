@@ -21,6 +21,7 @@ dependencies = [
     "scikit-learn",
     "kagglehub",
     "pandas",
+    "transformers",
 ]
 
 [project.urls]

@@ -342,7 +342,33 @@ def load_efficientnet_b0():
     return model, transform, "EfficientNet-B0"
 
 
-BACKBONES = [load_convnext_v2_tiny, load_dinov2_vits14, load_efficientnet_b0]
+# | export
+def load_dinov3_vits16():
+    """DINOv3 ViT-S/16 — latest self-supervised from Meta (2025)."""
+    from transformers import AutoImageProcessor, AutoModel
+
+    model_id = (
+        "facebook/dinov3-vits16-pretrain-lvd1689m"  # or -base / -large as desired
+    )
+    processor = AutoImageProcessor.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id)
+    model.eval()
+
+    def transform(img):
+        # Follow processor logic but match our existing pipeline style
+        inputs = processor(img, return_tensors="pt")
+        pixel_values = inputs["pixel_values"].squeeze(0)  # remove batch dim
+        return pixel_values  # already normalized by processor
+
+    return model, transform, "DINOv3 ViT-S/16"
+
+
+BACKBONES = [
+    load_convnext_v2_tiny,
+    load_dinov2_vits14,
+    load_efficientnet_b0,
+    load_dinov3_vits16,
+]
 ```
 
 ## Embedding extraction and caching
@@ -351,12 +377,29 @@ BACKBONES = [load_convnext_v2_tiny, load_dinov2_vits14, load_efficientnet_b0]
 # | export
 @torch.no_grad()
 def extract_embeddings(model, dataloader, device) -> tuple[np.ndarray, np.ndarray]:
-    """Extract L2-normalized embeddings from a pretrained backbone."""
+    """Extract L2-normalized embeddings from a pretrained backbone.
+
+    Handles both plain tensor outputs (ConvNeXt, DINOv2, EfficientNet)
+    and Transformers-style dataclass outputs (DINOv3).
+    """
     embeddings = []
     all_labels = []
     for images, batch_labels in tqdm(dataloader, desc="Extracting"):
         images = images.to(device)
-        features = model(images)
+        outputs = model(images)
+        if isinstance(outputs, torch.Tensor):
+            features = outputs
+        else:
+            # Assume Transformers-style output (BaseModelOutputWithPooling or similar)
+            # Prefer pooler_output if present; fallback to CLS token
+            if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
+                features = outputs.pooler_output
+            elif hasattr(outputs, "last_hidden_state"):
+                features = outputs.last_hidden_state[:, 0, :]  # CLS token
+            else:
+                raise ValueError(
+                    f"Unexpected model output type: {type(outputs)}. Cannot extract features."
+                )
         features = F.normalize(features, p=2, dim=1)
         embeddings.append(features.cpu().numpy())
         all_labels.append(batch_labels.numpy())
