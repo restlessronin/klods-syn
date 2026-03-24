@@ -434,7 +434,7 @@ def extract_and_cache_embeddings(
     Saves to results_dir/embeddings/{backbone}_{dataset_name}.npz.
     Skips extraction if cache already exists.
 
-    Returns dict mapping backbone name to {emb, labels} arrays.
+    Returns dict mapping backbone name to {emb, labels, paths} arrays.
     """
     if backbones is None:
         backbones = BACKBONES
@@ -445,6 +445,7 @@ def extract_and_cache_embeddings(
     emb_dir.mkdir(parents=True, exist_ok=True)
 
     all_embeddings = {}
+    paths_array = np.array(image_paths)
 
     for load_fn in backbones:
         model, transform, name = load_fn()
@@ -453,10 +454,11 @@ def extract_and_cache_embeddings(
 
         if cache_path.exists():
             print(f"{name}: loading cached embeddings from {cache_path.name}")
-            cached = np.load(cache_path)
+            cached = np.load(cache_path, allow_pickle=True)
             all_embeddings[name] = {
                 "emb": cached["emb"],
                 "labels": cached["labels"],
+                "paths": cached["paths"],
             }
             continue
 
@@ -469,12 +471,12 @@ def extract_and_cache_embeddings(
         loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
         emb, lab = extract_embeddings(model, loader, device)
 
-        np.savez(cache_path, emb=emb, labels=lab)
+        np.savez(cache_path, emb=emb, labels=lab, paths=paths_array)
         print(
             f"Cached {emb.shape[0]} embeddings (dim={emb.shape[1]}) to {cache_path.name}"
         )
 
-        all_embeddings[name] = {"emb": emb, "labels": lab}
+        all_embeddings[name] = {"emb": emb, "labels": lab, "paths": paths_array}
 
         del model
         if device == "cuda":
