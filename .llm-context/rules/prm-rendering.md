@@ -1,9 +1,9 @@
 ---
-description: "Focus on notebooks"
+description: "Focus on Rendering notebooks"
 overview: "full"
 instructions: [lc/ins-developer, lc/sty-code, lc/sty-python, lc/sty-jupyter]
 compose:
-  filters: ["flt-repo"]
+  filters: ["flt-rendering"]
   excerpters: [lc/exc-base]
 gitignores:
   full-files:
