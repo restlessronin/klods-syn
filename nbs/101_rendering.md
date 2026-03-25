@@ -49,6 +49,9 @@ print(f"Faces: {geom.face_sizes.shape}")
 
 ## Convert to Mitsuba mesh
 
+LDraw uses a right-handed coordinate system where **-Y is up**.
+Mitsuba 3 uses +Y up. Flip Y and reverse face winding to compensate.
+
 ```python
 vertices = geom.vertices.astype(np.float32)
 vertices[:, 1] *= -1
