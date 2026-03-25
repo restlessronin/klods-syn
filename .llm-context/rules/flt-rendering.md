@@ -5,5 +5,5 @@ compose:
   filters: ["lc/flt-no-files"]
 also-include:
   full-files:
-    - "nbs/100_*.md"
+    - "nbs/10*_*.md"
 ---
