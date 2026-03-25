@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.optimize import differential_evolution
+from scipy.spatial.transform import Rotation
 
 type Vec3 = tuple[float, float, float]
 ```
@@ -46,6 +47,14 @@ class ViewpointConfig:
     viewpoints: tuple[Vec3, ...]
     mirrors: tuple[PhysicalMirror, ...]
     target: Vec3 = (0.0, 0.0, 0.0)
+
+    @property
+    def mirror_zoom(self) -> float:
+        direct_dist = np.linalg.norm(np.array(self.camera) - np.array(self.target))
+        mirror_dist = np.linalg.norm(
+            np.array(self.viewpoints[1]) - np.array(self.target)
+        )
+        return mirror_dist / direct_dist
 ```
 
 ## Angular spread analysis
@@ -79,11 +88,22 @@ class TriMirrorRig:
     camera_dist: float
     ring_radius: float
     ring_height: float
+    tilt: Vec3 = (0.0, 0.0, 0.0)
+
+    def with_tilt(self, tilt: Vec3) -> "TriMirrorRig":
+        return TriMirrorRig(self.camera_dist, self.ring_radius, self.ring_height, tilt)
 
     def viewpoint_config(self, target: Vec3 = (0.0, 0.0, 0.0)) -> ViewpointConfig:
         cam = np.array([0.0, self.camera_dist, 0.0])
-        tgt = np.array(target)
         centers = self._mirror_centers()
+
+        rotvec = np.array(self.tilt)
+        if np.linalg.norm(rotvec) > 1e-12:
+            rot = Rotation.from_rotvec(rotvec)
+            cam = rot.apply(cam)
+            centers = [rot.apply(c) for c in centers]
+
+        tgt = np.array(target)
         mirrors = []
         viewpoints = [tuple(cam.tolist())]
         for c in centers:

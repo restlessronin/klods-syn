@@ -133,3 +133,69 @@ ax.set_axis_off()
 ax.set_title("3001 — 2×4 Brick")
 plt.show()
 ```
+
+## Multi-view rendering
+
+```python
+from klods_syn.rendering.viewpoints import TriMirrorRig, angular_spread
+
+type Vec3 = tuple[float, float, float]
+
+
+def build_scene(
+    mesh: mi.Mesh,
+    origin: Vec3,
+    target: Vec3 = (0, -5, 0),
+    fov: float = 35,
+    resolution: int = 512,
+    spp: int = 64,
+) -> mi.Scene:
+    return mi.load_dict(
+        {
+            "type": "scene",
+            "integrator": {"type": "direct"},
+            "sensor": {
+                "type": "perspective",
+                "fov": fov,
+                "to_world": mi.ScalarTransform4f.look_at(
+                    origin=list(origin),
+                    target=list(target),
+                    up=[0, 1, 0],
+                ),
+                "film": {"type": "hdrfilm", "width": resolution, "height": resolution},
+                "sampler": {"type": "independent", "sample_count": spp},
+            },
+            "light": {
+                "type": "constant",
+                "radiance": {"type": "spectrum", "value": 1.5},
+            },
+            "brick": mesh,
+        }
+    )
+
+
+rig = TriMirrorRig.optimize(camera_dist=250.0).with_tilt((np.pi / 4, 0.0, 0.0))
+config = rig.viewpoint_config()
+
+zooms = [1.0] + [config.mirror_zoom] * len(config.mirrors)
+
+images = [
+    mi.render(build_scene(mesh, origin=vp, fov=35 / zoom))
+    for vp, zoom in zip(config.viewpoints, zooms)
+]
+
+labels = ["direct"] + [f"mirror {i+1}" for i in range(len(config.mirrors))]
+
+fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+for ax, img, label in zip(axes, images, labels):
+    ax.imshow(mi.util.convert_to_bitmap(img))
+    ax.set_axis_off()
+    ax.set_title(label)
+fig.suptitle("3001 — 2×4 Brick — Multi-view")
+plt.tight_layout()
+plt.show()
+```
+
+```python
+
+```
