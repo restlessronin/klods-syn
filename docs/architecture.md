@@ -106,18 +106,24 @@ Not designed yet. Will be added when detection work begins.
 
 ## Build
 
-### Rendering pipeline (Rust + C++)
+### Rendering Pipeline
 
+LDraw mesh loading via ldr_tools (Rust), rendering via Mitsuba 3 (Python):
 ```
-# Rust rasterizer
-cd rendering
-cargo build --release
+LDraw .dat files
+  → ldr_tools (Rust) → triangle mesh + normals + color/material
+    → Mitsuba 3 (Python)
+        scalar_rgb variant         ← bulk path, direct integrator
+        spectral variant           ← quality path, path tracing
+        Output: single-part images for classification
+                multi-part scenes for detection (future)
+```
 
-# ChameleonRT (optional, for path tracing)
-cd rendering/pathtracer
-cmake -B build -DENABLE_METAL=ON   # macOS
-cmake --build build
-```
+Multi-view capture uses a tri-mirror rig geometry: camera above the
+target on the vertical axis, three mirrors on a ring below, each
+reflecting a distinct virtual viewpoint. Mirror positions and
+orientations are optimized to maximize angular spread across all
+viewpoints. See `rendering.viewpoints` module.
 
 ### Training (Python)
 
@@ -147,7 +153,8 @@ model weights, not the training pipeline.
 - sorted-studs Module 4: classification architecture and training strategy
 - LDraw parts library: https://ldraw.org
 - ldr_tools: https://github.com/ScanMountGoat/ldr_tools_blender
-- ChameleonRT: https://github.com/Twinklebear/ChameleonRT
+- Mitsuba 3: https://mitsuba.readthedocs.io/
+- ChameleonRT: https://github.com/Twinklebear/ChameleonRT (future: bulk path tracing)
 
 ```
 
