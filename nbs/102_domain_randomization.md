@@ -406,7 +406,10 @@ def build_scene(
                 "height": resolution,
                 **({"pixel_format": "rgba"} if mask_mode else {}),
             },
-            "sampler": {"type": "independent", "sample_count": 16 if mask_mode else spp},
+            "sampler": {
+                "type": "independent",
+                "sample_count": 16 if mask_mode else spp,
+            },
         },
         "brick": mesh,
     }
@@ -488,13 +491,15 @@ import io
 
 # | export
 def compute_exposure(masks: list[np.ndarray], percentile: float = 99) -> float:
-    brick_pixels = np.concatenate([
-        m[:, :, :3][m[:, :, 3] > 0.5] for m in masks
-    ])
-    return float(np.percentile(brick_pixels, percentile)) if brick_pixels.size > 0 else 1.0
-    
+    brick_pixels = np.concatenate([m[:, :, :3][m[:, :, 3] > 0.5] for m in masks])
+    return (
+        float(np.percentile(brick_pixels, percentile)) if brick_pixels.size > 0 else 1.0
+    )
 
-def postprocess(image: np.ndarray, cfg: RenderConfig, exposure: float = 1.0) -> np.ndarray:
+
+def postprocess(
+    image: np.ndarray, cfg: RenderConfig, exposure: float = 1.0
+) -> np.ndarray:
     img = np.clip(image[:, :, :3] if image.shape[2] > 3 else image, 0, None)
     img = img / (exposure + 1e-8)
 
@@ -570,9 +575,13 @@ for row in range(3):
 
     # Mask renders — cheap, for exposure computation
     masks = [
-        np.array(mi.render(mi.load_dict(
-            build_scene(mesh, cfg, origin=vp, fov=35 / zoom, mask_mode=True)
-        )))
+        np.array(
+            mi.render(
+                mi.load_dict(
+                    build_scene(mesh, cfg, origin=vp, fov=35 / zoom, mask_mode=True)
+                )
+            )
+        )
         for vp, zoom in zip(config.viewpoints, zooms)
     ]
     exposure = compute_exposure(masks)
