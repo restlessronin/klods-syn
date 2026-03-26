@@ -59,7 +59,6 @@ idx = geom.vertex_indices
 starts = geom.face_start_indices
 sizes = geom.face_sizes
 
-# Fan-triangulate: tris pass through, quads become two triangles
 triangles = []
 for s, n in zip(starts, sizes):
     for i in range(1, n - 1):
@@ -67,7 +66,7 @@ for s, n in zip(starts, sizes):
 
 faces = np.array(triangles, dtype=np.uint32)
 faces = faces[:, [0, 2, 1]]
-print(f"Triangles: {len(faces)}")  # expect 700
+print(f"Triangles: {len(faces)}")
 ```
 
 ```python
@@ -85,42 +84,69 @@ mesh_params.update()
 print(f"Mitsuba mesh: {mesh}")
 ```
 
+## Scene helpers
+
+```python
+type Vec3 = tuple[float, float, float]
+
+
+def make_bsdf(color: Vec3 = (0.85, 0.05, 0.05), ior: float = 1.53) -> dict:
+    return {
+        "type": "plastic",
+        "diffuse_reflectance": {"type": "rgb", "value": list(color)},
+        "int_ior": ior,
+    }
+
+
+def make_scene(
+    mesh: mi.Mesh,
+    origin: Vec3,
+    target: Vec3 = (0, -5, 0),
+    fov: float = 35,
+    resolution: int = 512,
+    spp: int = 128,
+) -> mi.Scene:
+    return mi.load_dict(
+        {
+            "type": "scene",
+            "integrator": {"type": "path", "max_depth": 4},
+            "sensor": {
+                "type": "perspective",
+                "fov": fov,
+                "to_world": mi.ScalarTransform4f.look_at(
+                    origin=list(origin),
+                    target=list(target),
+                    up=[0, 1, 0],
+                ),
+                "film": {"type": "hdrfilm", "width": resolution, "height": resolution},
+                "sampler": {"type": "independent", "sample_count": spp},
+            },
+            "key_light": {
+                "type": "directional",
+                "direction": [-1, -2, -0.5],
+                "irradiance": {"type": "spectrum", "value": 3.0},
+            },
+            "fill_light": {
+                "type": "directional",
+                "direction": [1, -1, 0.5],
+                "irradiance": {"type": "spectrum", "value": 1.0},
+            },
+            "background": {
+                "type": "constant",
+                "radiance": {"type": "spectrum", "value": 0.4},
+            },
+            "brick": mesh,
+        }
+    )
+```
+
 ## Render
 
 ```python
-bsdf = mi.load_dict(
-    {
-        "type": "plastic",
-        "diffuse_reflectance": {"type": "rgb", "value": [0.8, 0.1, 0.1]},
-        "int_ior": 1.49,
-    }
-)
+bsdf = mi.load_dict(make_bsdf())
 mesh.set_bsdf(bsdf)
 
-scene = mi.load_dict(
-    {
-        "type": "scene",
-        "integrator": {"type": "direct"},
-        "sensor": {
-            "type": "perspective",
-            "fov": 35,
-            "to_world": mi.ScalarTransform4f.look_at(
-                origin=[100, 50, 100],
-                target=[0, -5, 0],
-                up=[0, 1, 0],
-            ),
-            "film": {"type": "hdrfilm", "width": 512, "height": 512},
-            "sampler": {"type": "independent", "sample_count": 64},
-        },
-        "light": {
-            "type": "constant",
-            "radiance": {"type": "spectrum", "value": 1.5},
-        },
-        "brick": mesh,
-    }
-)
-
-image = mi.render(scene)
+image = mi.render(make_scene(mesh, origin=(100, 50, 100)))
 ```
 
 ```python
@@ -139,48 +165,13 @@ plt.show()
 ```python
 from klods_syn.rendering.viewpoints import TriMirrorRig, angular_spread
 
-type Vec3 = tuple[float, float, float]
-
-
-def build_scene(
-    mesh: mi.Mesh,
-    origin: Vec3,
-    target: Vec3 = (0, -5, 0),
-    fov: float = 35,
-    resolution: int = 512,
-    spp: int = 64,
-) -> mi.Scene:
-    return mi.load_dict(
-        {
-            "type": "scene",
-            "integrator": {"type": "direct"},
-            "sensor": {
-                "type": "perspective",
-                "fov": fov,
-                "to_world": mi.ScalarTransform4f.look_at(
-                    origin=list(origin),
-                    target=list(target),
-                    up=[0, 1, 0],
-                ),
-                "film": {"type": "hdrfilm", "width": resolution, "height": resolution},
-                "sampler": {"type": "independent", "sample_count": spp},
-            },
-            "light": {
-                "type": "constant",
-                "radiance": {"type": "spectrum", "value": 1.5},
-            },
-            "brick": mesh,
-        }
-    )
-
-
 rig = TriMirrorRig.optimize(camera_dist=250.0).with_tilt((np.pi / 4, 0.0, 0.0))
 config = rig.viewpoint_config()
 
 zooms = [1.0] + [config.mirror_zoom] * len(config.mirrors)
 
 images = [
-    mi.render(build_scene(mesh, origin=vp, fov=35 / zoom))
+    mi.render(make_scene(mesh, origin=vp, fov=35 / zoom))
     for vp, zoom in zip(config.viewpoints, zooms)
 ]
 
