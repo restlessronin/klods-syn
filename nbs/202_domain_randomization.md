@@ -110,6 +110,10 @@ for mat, cs in sorted(by_material.items()):
 [Poly Haven](https://polyhaven.com/) provides CC0 HDRIs via a public API.
 We fetch 1K resolution maps (~1–6MB each) and cache them locally.
 
+Category quotas bias toward low dynamic range environments (indoor,
+studio) that are closer to the scanner's operating conditions, while
+keeping some high-DR outdoor scenes for robustness.
+
 API: `https://api.polyhaven.com` — requires a `User-Agent` header.
 All requests require unique User-Agent per [API terms](https://polyhaven.com/our-api).
 
@@ -150,31 +154,51 @@ def download_hdri(
     return out_path
 
 
+@dataclass(frozen=True)
+class HdriQuota:
+    category: str
+    count: int
+
+
+DEFAULT_HDRI_QUOTAS: tuple[HdriQuota, ...] = (
+    HdriQuota("indoor", 20),
+    HdriQuota("studio", 15),
+    HdriQuota("night", 8),
+    HdriQuota("urban", 8),
+    HdriQuota("outdoor", 5),
+    HdriQuota("skies", 3),
+    HdriQuota("sunrise-sunset", 3),
+)
+
+
 def ensure_hdris(
-    n: int = 50,
+    quotas: tuple[HdriQuota, ...] = DEFAULT_HDRI_QUOTAS,
     out_dir: Path = HDRI_DIR_DEFAULT,
     resolution: str = "1k",
-    categories: tuple[str, ...] = ("indoor", "outdoor", "studio"),
 ) -> list[Path]:
-    all_names = []
-    for cat in categories:
-        all_names.extend(fetch_hdri_list(cat))
-    all_names = list(dict.fromkeys(all_names))  # dedupe preserving order
-
     rng = np.random.default_rng(42)
-    selected = rng.choice(all_names, size=min(n, len(all_names)), replace=False)
+    seen: set[str] = set()
+    paths: list[Path] = []
 
-    paths = []
-    for name in selected:
-        try:
-            paths.append(download_hdri(name, out_dir, resolution))
-        except Exception as e:
-            print(f"Skipping {name}: {e}")
+    for quota in quotas:
+        names = [n for n in fetch_hdri_list(quota.category) if n not in seen]
+        selected = (
+            rng.choice(names, size=min(quota.count, len(names)), replace=False)
+            if names
+            else []
+        )
+        for name in selected:
+            seen.add(name)
+            try:
+                paths.append(download_hdri(name, out_dir, resolution))
+            except Exception as e:
+                print(f"Skipping {name}: {e}")
+
     return paths
 ```
 
 ```python
-hdri_paths_raw = ensure_hdris(n=10)
+hdri_paths_raw = ensure_hdris()
 print(f"HDRIs downloaded: {len(hdri_paths_raw)}")
 ```
 
@@ -189,29 +213,50 @@ import mitsuba as mi
 mi.set_variant("scalar_rgb")
 ```
 
-## HDRI luminance filter
+## HDRI scoring and weighted pool
 
-Drop HDRIs that are too dark overall to provide adequate
-illumination from all viewpoints.
+Score each HDRI by dynamic range (log ratio of bright to dark
+percentiles). Build a sampling pool with inverse-DR weighting
+so low dynamic range environments dominate the training
+distribution while high-DR scenes still appear for robustness.
 
 ```python
 # | export
-def _mean_luminance(path: Path) -> float:
+@dataclass(frozen=True)
+class ScoredHdri:
+    path: Path
+    luminance: float
+    dynamic_range: float  # log ratio of 99th to 10th percentile
+
+
+def score_hdri(path: Path) -> ScoredHdri:
     img = np.array(mi.Bitmap(str(path)))
-    return float(np.mean(img[:, :, :3] * [0.2126, 0.7152, 0.0722]))
+    lum = img[:, :, :3] @ [0.2126, 0.7152, 0.0722]
+    p10, p99 = np.percentile(lum, [10, 99])
+    dr = float(np.log1p(p99) - np.log1p(p10))
+    return ScoredHdri(path, float(np.mean(lum)), dr)
 
 
-def filter_hdris(paths: list[Path], min_luminance: float = 0.1) -> list[Path]:
-    return [p for p in paths if _mean_luminance(p) >= min_luminance]
+def build_hdri_pool(
+    paths: list[Path], min_luminance: float = 0.1
+) -> tuple[list[ScoredHdri], np.ndarray]:
+    scored = [score_hdri(p) for p in paths]
+    pool = [s for s in scored if s.luminance >= min_luminance]
+    if not pool:
+        return [], np.array([])
+    drs = np.array([s.dynamic_range for s in pool])
+    weights = 1.0 / (1.0 + drs)
+    weights /= weights.sum()
+    return pool, weights
 ```
 
 ```python
-hdri_paths = filter_hdris(hdri_paths_raw)
-print(
-    f"HDRIs: {len(hdri_paths_raw)} downloaded, {len(hdri_paths)} passed luminance filter"
-)
-for p in hdri_paths:
-    print(f"  {p.stem}: luminance={_mean_luminance(p):.3f}")
+hdri_pool, hdri_weights = build_hdri_pool(hdri_paths_raw)
+print(f"HDRIs in pool: {len(hdri_pool)}")
+for s in sorted(hdri_pool, key=lambda s: s.dynamic_range):
+    print(
+        f"  {s.path.stem}: DR={s.dynamic_range:.2f} lum={s.luminance:.3f} weight={hdri_weights[hdri_pool.index(s)]:.3f}"
+    )
 ```
 
 ## Randomization space
@@ -259,7 +304,8 @@ class RandomizationSpace:
         self,
         rng: np.random.Generator,
         color_table: tuple[LDrawColor, ...],
-        hdri_paths: list[Path],
+        hdri_pool: list[ScoredHdri],
+        hdri_weights: np.ndarray,
     ) -> RenderConfig:
         part_rotation = Rotation.random(random_state=rng.integers(2**31)).as_rotvec()
         angle = rng.uniform(0, 2 * np.pi)
@@ -273,8 +319,12 @@ class RandomizationSpace:
 
         color = color_table[rng.integers(len(color_table))]
 
-        has_hdri = len(hdri_paths) > 0
-        hdri_path = hdri_paths[rng.integers(len(hdri_paths))] if has_hdri else None
+        has_hdri = len(hdri_pool) > 0
+        hdri_path = (
+            hdri_pool[rng.choice(len(hdri_pool), p=hdri_weights)].path
+            if has_hdri
+            else None
+        )
 
         fill_dir = _random_upper_hemisphere(rng)
 
@@ -314,7 +364,7 @@ def _random_upper_hemisphere(rng: np.random.Generator) -> Vec3:
 ```python
 rng = np.random.default_rng(0)
 space = RandomizationSpace()
-cfg = space.sample(rng, color_table, hdri_paths)
+cfg = space.sample(rng, color_table, hdri_pool, hdri_weights)
 print(f"Color: {cfg.color.name} ({cfg.color.material})")
 print(f"Roughness: {cfg.roughness:.3f}, IOR: {cfg.ior:.3f}")
 print(f"Background: {cfg.background_mode}")
@@ -360,19 +410,22 @@ def make_bsdf(cfg: RenderConfig) -> dict:
         }
     if c.material in ("pearl", "metallic"):
         return {
-            "type": "plastic",
+            "type": "roughplastic",
+            "distribution": "ggx",
+            "alpha": cfg.roughness + 0.1,
             "diffuse_reflectance": {"type": "rgb", "value": list(c.rgb)},
             "int_ior": cfg.ior + 0.1,
-            "nonlinear": True,
         }
     return {
-        "type": "plastic",
+        "type": "roughplastic",
+        "distribution": "ggx",
+        "alpha": cfg.roughness,
         "diffuse_reflectance": {"type": "rgb", "value": list(c.rgb)},
         "int_ior": cfg.ior,
     }
 
 
-_AMBIENT_DIRS = [(0, -1, 0), (1, -0.5, 0.5), (-1, -0.5, -0.5)]
+_AMBIENT_DIRS = []
 
 
 def build_scene(
@@ -567,7 +620,7 @@ rig_base = TriMirrorRig.optimize(camera_dist=250.0)
 
 fig, axes = plt.subplots(3, 4, figsize=(24, 15))
 for row in range(3):
-    cfg = space.sample(rng, color_table, hdri_paths)
+    cfg = space.sample(rng, color_table, hdri_pool, hdri_weights)
     rig = rig_base.with_tilt(cfg.rig_tilt)
     config = rig.viewpoint_config()
     zooms = [1.0] + [config.mirror_zoom] * len(config.mirrors)
