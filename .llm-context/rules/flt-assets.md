@@ -1,9 +1,10 @@
 ---
-description: "Exclude inessential files"
+description: "Assets Exploration"
 overview: "full"
 compose:
   filters: ["lc/flt-no-files"]
 also-include:
   full-files:
-    - "nbs/30*_*.md"
+    - "nbs/0*_*.md"
+    - "nbs/10*_*.md"
 ---

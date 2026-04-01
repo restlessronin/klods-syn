@@ -2,7 +2,7 @@
 description: 
 instructions: [ins-ml]
 compose:
-  filters: [lc/flt-no-files]
+  filters: [flt-assets]
   excerpters: [lc/exc-base]
 also-include:
   full-files:

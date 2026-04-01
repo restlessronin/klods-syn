@@ -1,9 +1,9 @@
 ---
-description: "Exclude inessential files"
+description: "Parts Catalog"
 overview: "full"
 compose:
   filters: ["lc/flt-no-files"]
 also-include:
   full-files:
-    - "nbs/30*_*.md"
+    - "nbs/10*_*.md"
 ---
