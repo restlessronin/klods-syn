@@ -188,10 +188,3 @@ print(
     )
 )
 ```
-
-```python
-# | hide
-import nbdev
-
-nbdev.nbdev_export()
-```

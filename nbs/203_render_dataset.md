@@ -69,6 +69,12 @@ if platform.system() == "Linux":
         built.rename(so_path)
 
     sys.path.insert(0, str(LDR_TOOLS_DIR))
+
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q",
+         "git+https://github.com/restlessronin/klods-syn.git"],
+        check=True,
+    )
 else:
     sys.path.insert(0, "..")
 ```

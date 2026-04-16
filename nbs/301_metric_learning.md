@@ -385,10 +385,3 @@ results_df.to_csv(METRIC_DIR / "metric_learning_results.csv", index=False)
 print(f"Model saved to {METRIC_DIR / 'projection_head.pt'}")
 print(f"Results saved to {METRIC_DIR / 'metric_learning_results.csv'}")
 ```
-
-```python
-# | hide
-import nbdev
-
-nbdev.nbdev_export()
-```

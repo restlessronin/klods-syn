@@ -131,10 +131,3 @@ for p in sorted(emb_dir.glob("*gdansk*.npz")):
     data = np.load(p)
     print(f"{p.name}: emb={data['emb'].shape}, labels={data['labels'].shape}")
 ```
-
-```python
-# | hide
-import nbdev
-
-nbdev.nbdev_export()
-```

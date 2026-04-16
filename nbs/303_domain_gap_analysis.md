@@ -284,10 +284,3 @@ for ax, (sims, labels, preds, title) in zip(
 plt.tight_layout()
 plt.show()
 ```
-
-```python
-# | hide
-import nbdev
-
-nbdev.nbdev_export()
-```
