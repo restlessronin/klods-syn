@@ -42,6 +42,7 @@ TABLES = [
     "inventories",
     "elements",
     "part_relationships",
+    "colors",
 ]
 
 EXCLUDE_CATEGORIES = {
@@ -71,6 +72,7 @@ inv_parts = fetch_table("inventory_parts")
 inventories = fetch_table("inventories")
 elements = fetch_table("elements")
 relationships = fetch_table("part_relationships")
+colors = fetch_table("colors")
 
 for name, df in [
     ("Parts", parts),
@@ -78,6 +80,7 @@ for name, df in [
     ("Inventory entries", inv_parts),
     ("Elements", elements),
     ("Relationships", relationships),
+    ("Colors", colors),
 ]:
     print(f"{name}: {len(df):,} — {df.columns.tolist()}")
 ```
@@ -315,4 +318,97 @@ output.to_csv(out_path, index=False)
 print(
     f"Exported {len(output):,} LDraw parts ({COVERAGE_TARGET:.0%} coverage) to {out_path}"
 )
+```
+
+## Color material classification
+
+Rebrickable's `colors` table has `is_trans` but no explicit material field.
+Material type is derivable from color name prefixes, matching the BSDF routing
+in `domain_randomization.py`.
+
+```python
+def classify_material(row) -> str:
+    name = row["name"]
+    if row["is_trans"]:
+        return "transparent"
+    if name.startswith("Chrome"):
+        return "chrome"
+    if name.startswith("Pearl") or name.startswith("Metallic"):
+        return "metallic"
+    if any(name.startswith(p) for p in ["Glitter", "Speckle", "Glow", "HO "]):
+        return "special"
+    return "solid"
+
+
+colors["material"] = colors.apply(classify_material, axis=1)
+colors["material"].value_counts()
+```
+
+## Color distribution across working subset
+
+Which material types does each part in the working subset actually appear in?
+Uses real set inventory data — only colors that LEGO has produced for each part.
+
+```python
+subset_part_nums = set(results[results["ldraw_id"].isin(set(output["ldraw_id"]))].index)
+
+color_dist = (
+    inv_parts[inv_parts["part_num"].isin(subset_part_nums) & ~inv_parts["is_spare"]]
+    .merge(results[["ldraw_id"]].reset_index(), on="part_num")
+    .merge(colors[["id", "name", "material"]], left_on="color_id", right_on="id")
+    .groupby(["ldraw_id", "color_id", "name", "material"])
+    .agg(total_qty=("quantity", "sum"))
+    .reset_index()
+    .sort_values(["ldraw_id", "total_qty"], ascending=[True, False])
+)
+
+print(f"Part-color combinations in working subset: {len(color_dist):,}")
+print()
+print("Material type breakdown (unique part-color pairs):")
+color_dist.groupby("material").size().sort_values(ascending=False)
+```
+
+## Parts by material type
+
+How many parts in the working subset appear in each material category.
+Transparent/chrome/metallic renders are only needed for parts in this list.
+
+```python
+material_coverage = (
+    color_dist.drop_duplicates(subset=["ldraw_id", "material"])
+    .groupby("material")["ldraw_id"]
+    .nunique()
+    .sort_values(ascending=False)
+)
+total_parts = output["ldraw_id"].nunique()
+print(f"Total parts in working subset: {total_parts:,}\n")
+for mat, n in material_coverage.items():
+    print(f"  {mat:12s}: {n:4d} parts  ({n/total_parts:.0%})")
+```
+
+## Export render plan
+
+One row per (ldraw_id, color_id) that should be rendered — derived from real
+LEGO inventory. Special material colors (glitter, speckle, glow) are excluded
+as their optical behaviour is not modelled by the current BSDF routing.
+
+```python
+render_plan = (
+    color_dist[color_dist["material"] != "special"][
+        ["ldraw_id", "color_id", "name", "material", "total_qty"]
+    ]
+    .rename(columns={"name": "color_name"})
+    .sort_values(["ldraw_id", "total_qty"], ascending=[True, False])
+    .reset_index(drop=True)
+)
+
+plan_path = DATA_DIR / "render_plan.csv"
+render_plan.to_csv(plan_path, index=False)
+
+print(f"Render plan: {len(render_plan):,} part-color pairs")
+print(f"  solid:       {(render_plan['material']=='solid').sum():,}")
+print(f"  transparent: {(render_plan['material']=='transparent').sum():,}")
+print(f"  chrome:      {(render_plan['material']=='chrome').sum():,}")
+print(f"  metallic:    {(render_plan['material']=='metallic').sum():,}")
+print(f"Saved to {plan_path}")
 ```

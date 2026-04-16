@@ -26,6 +26,7 @@ Builds on the rendering pipeline from `101_rendering.md`.
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import mitsuba as mi
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -261,6 +262,19 @@ for s in sorted(hdri_pool, key=lambda s: s.dynamic_range):
 
 ## Randomization space
 
+`part_rotation` samples uniformly over SO(3) — all orientations equally likely,
+including upside-down and on-side. This is intentional: parts arrive in arbitrary
+orientations in the real scanner, and there is no physics engine to restrict
+sampling to stable resting poses.
+
+`rig_tilt` also samples uniformly over SO(3), but is redundant with `part_rotation`.
+`TriMirrorRig.with_tilt()` applies a rigid rotation to both the camera and mirror
+centers — from the part's perspective this is identical to rotating the part in the
+opposite direction. Composing two uniform SO(3) samples produces another uniform
+SO(3) sample, so `rig_tilt` adds no viewpoint coverage beyond what `part_rotation`
+already provides. It remains in `RenderConfig` as a zero-cost field but could be
+removed without affecting the training distribution.
+
 ```python
 # | export
 @dataclass(frozen=True)
@@ -303,9 +317,10 @@ class RandomizationSpace:
     def sample(
         self,
         rng: np.random.Generator,
-        color_table: tuple[LDrawColor, ...],
         hdri_pool: list[ScoredHdri],
         hdri_weights: np.ndarray,
+        color_table: tuple[LDrawColor, ...] = (),
+        color: LDrawColor | None = None,
     ) -> RenderConfig:
         part_rotation = Rotation.random(random_state=rng.integers(2**31)).as_rotvec()
         angle = rng.uniform(0, 2 * np.pi)
@@ -317,7 +332,7 @@ class RandomizationSpace:
         )
         rig_tilt = Rotation.random(random_state=rng.integers(2**31)).as_rotvec()
 
-        color = color_table[rng.integers(len(color_table))]
+        color = color if color is not None else color_table[rng.integers(len(color_table))]
 
         has_hdri = len(hdri_pool) > 0
         hdri_path = (
@@ -364,7 +379,7 @@ def _random_upper_hemisphere(rng: np.random.Generator) -> Vec3:
 ```python
 rng = np.random.default_rng(0)
 space = RandomizationSpace()
-cfg = space.sample(rng, color_table, hdri_pool, hdri_weights)
+cfg = space.sample(rng, hdri_pool, hdri_weights, color_table=color_table)
 print(f"Color: {cfg.color.name} ({cfg.color.material})")
 print(f"Roughness: {cfg.roughness:.3f}, IOR: {cfg.ior:.3f}")
 print(f"Background: {cfg.background_mode}")
@@ -620,7 +635,7 @@ rig_base = TriMirrorRig.optimize(camera_dist=250.0)
 
 fig, axes = plt.subplots(3, 4, figsize=(24, 15))
 for row in range(3):
-    cfg = space.sample(rng, color_table, hdri_pool, hdri_weights)
+    cfg = space.sample(rng, hdri_pool, hdri_weights, color_table=color_table)
     rig = rig_base.with_tilt(cfg.rig_tilt)
     config = rig.viewpoint_config()
     zooms = [1.0] + [config.mirror_zoom] * len(config.mirrors)
