@@ -12,12 +12,14 @@ jupyter:
     name: python3
 ---
 
-# Metric Learning — Supervised Contrastive Projection Head
+# Metric Learning — View-Aware Supervised Contrastive
 
-Freeze DINOv2 ViT-S/14 backbone, train a projection head with
-supervised contrastive loss on cached Gdańsk train embeddings.
-Re-run the same cross-domain k-NN eval to measure improvement
-over the baseline.
+Train a projection head on frozen DINOv3 ViT-S/16 embeddings extracted
+from synthetic renders. Uses view-aware contrastive pairs: same part +
+same viewpoint = positive, same part + different viewpoint = excluded
+(neither positive nor negative). This preserves viewpoint information
+in the embedding space so the downstream fusion layer (304) has
+meaningful per-view signals to combine.
 
 ```python
 # | default_exp metric
@@ -30,35 +32,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from pathlib import Path
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from collections import Counter
+from torch.utils.data import Dataset, DataLoader, Sampler
+from collections import defaultdict
 ```
 
 ```python
-from klods_syn.data import RESULTS_DIR, BACKBONES, get_device
 import matplotlib.pyplot as plt
-import pandas as pd
 ```
 
 ## Configuration
 
 ```python
+RESULTS_DIR = Path("../results/synthetic")
 EMB_DIR = RESULTS_DIR / "embeddings"
 METRIC_DIR = RESULTS_DIR / "metric"
 METRIC_DIR.mkdir(parents=True, exist_ok=True)
 
-BACKBONE = "DINOv3_ViT-S_16"  # safe name for filenames
-BACKBONE_DISPLAY = "DINOv3 ViT-S/16"  # must match backbone name in baseline CSV
+BACKBONE = "DINOv3_ViT-S_16"
 INPUT_DIM = 384
 PROJ_DIM = 128
-BATCH_SIZE = 256
-SAMPLES_PER_CLASS = 4
+GROUPS_PER_BATCH = 64
+SAMPLES_PER_GROUP = 4
+BATCH_SIZE = GROUPS_PER_BATCH * SAMPLES_PER_GROUP
 LR = 1e-3
 EPOCHS = 50
 TEMPERATURE = 0.1
 RANDOM_SEED = 42
-EVAL_DATASETS = ["gdansk_test", "brickognize", "paco_garcia"]
-K_VALUES = [1, 3, 5]
 ```
 
 ## Projection head
@@ -83,15 +82,14 @@ class ProjectionHead(nn.Module):
 
 ## Supervised contrastive loss
 
+Standard SupCon (Khosla et al., 2020) treats all same-label samples as
+positives. Used by the fusion layer (304) where view distinction is
+irrelevant.
+
 ```python
 # | export
 class SupConLoss(nn.Module):
-    """Supervised contrastive loss (Khosla et al., 2020).
-
-    For each anchor, all samples with the same label in the batch
-    are positives — the loss pulls them together and pushes apart
-    all negatives.
-    """
+    """Supervised contrastive loss (Khosla et al., 2020)."""
 
     def __init__(self, temperature: float = 0.1):
         super().__init__()
@@ -101,81 +99,185 @@ class SupConLoss(nn.Module):
         device = embeddings.device
         n = embeddings.shape[0]
 
-        # Cosine similarity matrix (embeddings assumed L2-normalized)
         sim = embeddings @ embeddings.T / self.temperature
 
-        # Mask: same-label pairs (excluding self)
         labels = labels.unsqueeze(1)
         pos_mask = (labels == labels.T).float().to(device)
         pos_mask.fill_diagonal_(0)
 
-        # For numerical stability
         logits_max = sim.max(dim=1, keepdim=True).values
         logits = sim - logits_max.detach()
 
-        # Exclude self-similarity
         self_mask = torch.eye(n, device=device)
         logits = logits - self_mask * 1e9
 
-        # Log-softmax over all non-self entries
         exp_logits = torch.exp(logits) * (1 - self_mask)
         log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
 
-        # Mean log-prob over positive pairs
         pos_count = pos_mask.sum(dim=1)
         mean_log_prob = (pos_mask * log_prob).sum(dim=1) / (pos_count + 1e-12)
 
-        # Only include anchors that have at least one positive
         valid = pos_count > 0
         loss = -mean_log_prob[valid].mean()
         return loss
 ```
 
-## Embedding dataset
+## View-aware supervised contrastive loss
+
+Positive pairs share both the same part label and the same view index.
+Same-part-different-view pairs are excluded from the denominator so
+they exert no gradient — they neither attract nor repel.
 
 ```python
 # | export
-class EmbeddingDataset(Dataset):
-    """Dataset wrapping pre-extracted embeddings and labels."""
+class ViewAwareSupConLoss(nn.Module):
+    """Supervised contrastive loss with view-aware pair selection.
 
-    def __init__(self, embeddings: np.ndarray, labels: np.ndarray):
+    Positives: same part AND same viewpoint.
+    Excluded: same part, different viewpoint (no gradient).
+    Negatives: different part.
+    """
+
+    def __init__(self, temperature: float = 0.1):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(
+        self,
+        embeddings: torch.Tensor,
+        labels: torch.Tensor,
+        view_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        device = embeddings.device
+        n = embeddings.shape[0]
+
+        sim = embeddings @ embeddings.T / self.temperature
+
+        same_part = (labels.unsqueeze(1) == labels.unsqueeze(0)).float()
+        same_view = (view_idx.unsqueeze(1) == view_idx.unsqueeze(0)).float()
+
+        pos_mask = same_part * same_view
+        pos_mask.fill_diagonal_(0)
+
+        exclude_mask = same_part * (1 - same_view)
+
+        self_mask = torch.eye(n, device=device)
+        valid_mask = (1 - self_mask - exclude_mask).clamp(min=0)
+
+        logits_max = sim.max(dim=1, keepdim=True).values
+        logits = sim - logits_max.detach()
+
+        exp_logits = torch.exp(logits) * valid_mask
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
+
+        pos_count = pos_mask.sum(dim=1)
+        mean_log_prob = (pos_mask * log_prob).sum(dim=1) / (pos_count + 1e-12)
+
+        valid = pos_count > 0
+        loss = -mean_log_prob[valid].mean()
+        return loss
+```
+
+## View-aware embedding dataset
+
+```python
+# | export
+class ViewAwareEmbeddingDataset(Dataset):
+    """Dataset wrapping embeddings with part labels and view indices."""
+
+    def __init__(
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray,
+        view_idx: np.ndarray,
+    ):
         self.embeddings = torch.from_numpy(embeddings).float()
         self.labels = torch.from_numpy(labels).long()
+        self.view_idx = torch.from_numpy(view_idx).long()
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return self.embeddings[idx], self.labels[idx]
+        return self.embeddings[idx], self.labels[idx], self.view_idx[idx]
 ```
 
-## Balanced batch sampler
+## View-grouped batch sampler
 
-SupCon needs multiple positives per class in each batch. We use a
-weighted sampler to oversample rare classes, combined with a batch
-size large enough to get ~4 samples per class on average.
+Each batch contains `groups_per_batch` random (part, view) groups with
+`samples_per_group` embeddings each, ensuring every anchor has at least
+`samples_per_group - 1` same-view positives.
 
 ```python
-def make_balanced_sampler(labels: np.ndarray) -> WeightedRandomSampler:
-    """Create a sampler that balances class frequencies."""
-    counts = Counter(labels.tolist())
-    weights = np.array([1.0 / counts[l] for l in labels])
-    return WeightedRandomSampler(weights, num_samples=len(labels), replacement=True)
+# | export
+class ViewGroupedSampler(Sampler):
+    """Samples batches of (part, view) groups for view-aware SupCon."""
+
+    def __init__(
+        self,
+        labels: np.ndarray,
+        view_idx: np.ndarray,
+        groups_per_batch: int = 64,
+        samples_per_group: int = 4,
+        num_batches: int | None = None,
+        rng_seed: int = 42,
+    ):
+        self.groups_per_batch = groups_per_batch
+        self.samples_per_group = samples_per_group
+        self.rng = np.random.default_rng(rng_seed)
+
+        self.group_indices: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for i, (lab, vid) in enumerate(zip(labels, view_idx)):
+            self.group_indices[(int(lab), int(vid))].append(i)
+
+        self.valid_groups = [
+            k for k, v in self.group_indices.items()
+            if len(v) >= samples_per_group
+        ]
+
+        n_samples = sum(len(v) for v in self.group_indices.values())
+        self._num_batches = num_batches or (
+            n_samples // (groups_per_batch * samples_per_group)
+        )
+
+    def __iter__(self):
+        for _ in range(self._num_batches):
+            chosen = self.rng.choice(
+                len(self.valid_groups),
+                size=min(self.groups_per_batch, len(self.valid_groups)),
+                replace=False,
+            )
+            batch = []
+            for g_idx in chosen:
+                group_key = self.valid_groups[g_idx]
+                members = self.group_indices[group_key]
+                selected = self.rng.choice(
+                    members, size=self.samples_per_group, replace=len(members) < self.samples_per_group
+                )
+                batch.extend(selected.tolist())
+            yield batch
+
+    def __len__(self):
+        return self._num_batches
 ```
 
-## Load train embeddings
+## Load synthetic embeddings
 
 ```python
-train_data = np.load(EMB_DIR / f"{BACKBONE}_gdansk_train.npz")
-train_emb = train_data["emb"]
-train_labels = train_data["labels"]
+data = np.load(EMB_DIR / f"{BACKBONE}_synthetic.npz", allow_pickle=True)
+train_emb = data["emb"]
+train_labels = data["labels"]
+train_view_idx = data["view_idx"]
 print(f"Train: {train_emb.shape[0]} embeddings, dim={train_emb.shape[1]}")
-print(f"Classes: {len(set(train_labels.tolist()))}")
+print(f"Classes: {len(np.unique(train_labels))}")
+print(f"Views: {np.unique(train_view_idx).tolist()}")
 ```
 
 ## Train
 
 ```python
+from klods_syn.data import get_device
+
 torch.manual_seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
@@ -183,25 +285,31 @@ device = get_device()
 print(f"Device: {device}")
 
 head = ProjectionHead(INPUT_DIM, PROJ_DIM).to(device)
-criterion = SupConLoss(temperature=TEMPERATURE)
+criterion = ViewAwareSupConLoss(temperature=TEMPERATURE)
 optimizer = torch.optim.Adam(head.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
-dataset = EmbeddingDataset(train_emb, train_labels)
-sampler = make_balanced_sampler(train_labels)
-loader = DataLoader(dataset, batch_size=BATCH_SIZE, sampler=sampler, drop_last=True)
+dataset = ViewAwareEmbeddingDataset(train_emb, train_labels, train_view_idx)
+sampler = ViewGroupedSampler(
+    train_labels, train_view_idx,
+    groups_per_batch=GROUPS_PER_BATCH,
+    samples_per_group=SAMPLES_PER_GROUP,
+    rng_seed=RANDOM_SEED,
+)
+loader = DataLoader(dataset, batch_sampler=sampler)
 
 losses = []
 for epoch in range(EPOCHS):
     head.train()
     epoch_loss = 0.0
     n_batches = 0
-    for emb_batch, label_batch in loader:
+    for emb_batch, label_batch, view_batch in loader:
         emb_batch = emb_batch.to(device)
         label_batch = label_batch.to(device)
+        view_batch = view_batch.to(device)
 
         projected = head(emb_batch)
-        loss = criterion(projected, label_batch)
+        loss = criterion(projected, label_batch, view_batch)
 
         optimizer.zero_grad()
         loss.backward()
@@ -225,163 +333,15 @@ for epoch in range(EPOCHS):
 fig, ax = plt.subplots(figsize=(8, 4))
 ax.plot(losses)
 ax.set_xlabel("Epoch")
-ax.set_ylabel("SupCon Loss")
+ax.set_ylabel("View-Aware SupCon Loss")
 ax.set_title("Metric Learning — Training Loss")
 plt.tight_layout()
 plt.show()
 ```
 
-## Project all embeddings
-
-```python
-head.eval()
-
-
-def project_embeddings(emb: np.ndarray, model: nn.Module, device: str) -> np.ndarray:
-    """Project embeddings through the trained head."""
-    with torch.no_grad():
-        t = torch.from_numpy(emb).float().to(device)
-        # Process in chunks to stay within memory
-        chunks = []
-        for i in range(0, len(t), 1024):
-            chunks.append(model(t[i : i + 1024]).cpu().numpy())
-    return np.concatenate(chunks)
-
-
-projected = {}
-
-# Train
-proj_train = project_embeddings(train_emb, head, device)
-projected["gdansk_train"] = {"emb": proj_train, "labels": train_labels}
-print(f"gdansk_train: {proj_train.shape}")
-
-# Eval datasets
-for ds in EVAL_DATASETS:
-    path = EMB_DIR / f"{BACKBONE}_{ds}.npz"
-    if not path.exists():
-        print(f"  Missing: {path.name}")
-        continue
-    data = np.load(path)
-    proj = project_embeddings(data["emb"], head, device)
-    projected[ds] = {"emb": proj, "labels": data["labels"]}
-    print(f"{ds}: {proj.shape}")
-```
-
-## k-NN evaluation
-
-```python
-def knn_predict(train_emb, train_labels, test_emb, k):
-    sims = test_emb @ train_emb.T
-    top_k_idx = np.argpartition(-sims, k, axis=1)[:, :k]
-    preds = []
-    for i in range(len(test_emb)):
-        neighbors = top_k_idx[i]
-        neighbor_labels = train_labels[neighbors]
-        counts = np.bincount(neighbor_labels)
-        preds.append(counts.argmax())
-    return np.array(preds)
-
-
-def knn_top_k_scores(train_emb, train_labels, test_emb, test_labels, k_values):
-    from sklearn.metrics import accuracy_score
-
-    sims = test_emb @ train_emb.T
-    results = {}
-    for k in k_values:
-        preds = knn_predict(train_emb, train_labels, test_emb, k)
-        results[f"k={k} top-1"] = accuracy_score(test_labels, preds)
-    top5_idx = np.argpartition(-sims, 5, axis=1)[:, :5]
-    top5_correct = sum(
-        1 for i in range(len(test_emb)) if test_labels[i] in train_labels[top5_idx[i]]
-    )
-    results["top-5 retrieval"] = top5_correct / len(test_emb)
-    return results
-```
-
-```python
-all_results = []
-
-train_proj = projected["gdansk_train"]
-
-for ds in EVAL_DATASETS:
-    if ds not in projected:
-        continue
-    test_proj = projected[ds]
-    scores = knn_top_k_scores(
-        train_proj["emb"],
-        train_proj["labels"],
-        test_proj["emb"],
-        test_proj["labels"],
-        K_VALUES,
-    )
-    for metric, value in scores.items():
-        all_results.append({"eval_dataset": ds, "metric": metric, "accuracy": value})
-    print(f"{ds}: {scores}")
-
-results_df = pd.DataFrame(all_results)
-```
-
-## Results table
-
-```python
-pivot = results_df.pivot_table(
-    index="metric", columns="eval_dataset", values="accuracy"
-)
-pivot = pivot[EVAL_DATASETS]
-
-print("\n" + "=" * 60)
-print(f"Metric Learning k-NN Eval ({BACKBONE_DISPLAY} + SupCon projection head)")
-print("=" * 60)
-print(pivot.to_string(float_format="{:.3f}".format))
-```
-
-## Comparison with baseline
-
-```python
-baseline_path = RESULTS_DIR / "cross_domain_knn_results.csv"
-if baseline_path.exists():
-    baseline_df = pd.read_csv(baseline_path)
-    baseline_backbone = baseline_df[baseline_df["backbone"] == BACKBONE_DISPLAY]
-
-    print("\n" + "=" * 60)
-    print(f"Baseline ({BACKBONE_DISPLAY} frozen) vs Metric Learning (SupCon head)")
-    print("=" * 60)
-
-    comparison = []
-    for ds in EVAL_DATASETS:
-        for metric in ["k=1 top-1", "top-5 retrieval"]:
-            base_val = baseline_backbone[
-                (baseline_backbone["eval_dataset"] == ds)
-                & (baseline_backbone["metric"] == metric)
-            ]["accuracy"].values
-            metric_val = results_df[
-                (results_df["eval_dataset"] == ds) & (results_df["metric"] == metric)
-            ]["accuracy"].values
-            if len(base_val) > 0 and len(metric_val) > 0:
-                comparison.append(
-                    {
-                        "dataset": ds,
-                        "metric": metric,
-                        "baseline": base_val[0],
-                        "metric_learning": metric_val[0],
-                        "delta": metric_val[0] - base_val[0],
-                    }
-                )
-
-    if comparison:
-        comp_df = pd.DataFrame(comparison)
-        print(comp_df.to_string(index=False, float_format="{:.3f}".format))
-    else:
-        print(f"No matching baseline results found for {BACKBONE_DISPLAY}")
-else:
-    print("Baseline results not found — run 04_baseline_eval first")
-```
-
-## Save model and results
+## Save model
 
 ```python
 torch.save(head.state_dict(), METRIC_DIR / "projection_head.pt")
-results_df.to_csv(METRIC_DIR / "metric_learning_results.csv", index=False)
 print(f"Model saved to {METRIC_DIR / 'projection_head.pt'}")
-print(f"Results saved to {METRIC_DIR / 'metric_learning_results.csv'}")
 ```
