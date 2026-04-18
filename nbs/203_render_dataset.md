@@ -435,12 +435,12 @@ if platform.system() == "Linux":
     import urllib.request
     import zipfile
 
-    KAGGLE_INPUT = Path("/kaggle/input/klods-syn-hdri")
+    KAGGLE_INPUT = next(Path("/kaggle/input").rglob("klods-syn-hdri"))
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     hdri_link = DATA_DIR / "hdri"
-    if not hdri_link.exists():
+    if not (hdri_link.is_symlink() or hdri_link.exists()):
         hdri_link.symlink_to(KAGGLE_INPUT / "hdri")
 
     rebrickable_dir = DATA_DIR / "rebrickable"
@@ -460,10 +460,12 @@ if platform.system() == "Linux":
     ldraw_root = DATA_DIR / "ldraw"
     if not ldraw_root.exists():
         complete_zip = Path("/tmp/ldraw-complete.zip")
-        urllib.request.urlretrieve(
+        req = urllib.request.Request(
             "https://library.ldraw.org/library/updates/complete.zip",
-            complete_zip,
+            headers={"User-Agent": "Mozilla/5.0"},
         )
+        with urllib.request.urlopen(req) as resp, open(complete_zip, "wb") as f:
+            shutil.copyfileobj(resp, f)
         with zipfile.ZipFile(complete_zip) as zf:
             zf.extractall(DATA_DIR)
 ```
