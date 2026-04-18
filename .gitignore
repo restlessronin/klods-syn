@@ -54,6 +54,7 @@ nbs/.ipynb_checkpoints/
 # nbdev generated
 _docs/
 _proc/
+nbs/sidebar.yml
 
 # Data
 data/

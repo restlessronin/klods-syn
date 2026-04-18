@@ -4,6 +4,6 @@ project:
 website:
   title: "klods-syn"
   site-url: "https://restlessronin.github.io/klods-syn"
-  description: ""
+  description: "Computer vision models and synthetic training data for LEGO brick recognition"
   repo-branch: main
   repo-url: "https://github.com/restlessronin/klods-syn"

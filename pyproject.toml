@@ -39,6 +39,8 @@ version = { attr = "klods_syn.__version__" }
 include = ["klods_syn"]
 
 [tool.nbdev]
+skip_procs = "exec_show_docs"
+readme_nb = "__none__.ipynb"
 
 [dependency-groups]
 dev = [
@@ -49,6 +51,7 @@ dev = [
     "tqdm",
     "matplotlib",
     "blacken-docs",
+    "ghp-import>=2.1.0",
 ]
 
 [tool.jupytext]

@@ -1,5 +1,8 @@
 project:
   type: website
+  render:
+    - "*.ipynb"
+    - "!1*.ipynb"
 
 format:
   html:
@@ -8,6 +11,9 @@ format:
     toc: true
     keep-md: true
   commonmark: default
+
+execute:
+  enabled: false
 
 website:
   twitter-card: true
