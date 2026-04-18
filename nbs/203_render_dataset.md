@@ -296,8 +296,12 @@ are immediately usable.
 a small value (1–5) enables a quick smoke-test; the full dataset
 uses whatever N was decided for training.
 
-`max_seconds` provides a time-based stop for test runs — the loop
-exits cleanly after the current pair finishes.
+`max_seconds` and `max_pairs` are stopping conditions for bounded runs;
+the loop exits cleanly after the current pair finishes when either
+fires. `max_pairs` counts pairs with actual work done (skipped pairs
+from the manifest don't count), so it's a predictable unit of work for
+session batching. `max_seconds` is useful as a hard safety bound under
+Kaggle's session-kill.
 
 ```python
 # | export
@@ -310,6 +314,7 @@ def render_dataset(
     spp: int = 64,
     resolution: int = 512,
     max_seconds: float | None = None,
+    max_pairs: int | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -330,9 +335,12 @@ def render_dataset(
 
     t_start = time.monotonic()
     n_rendered = 0
+    n_pairs_done = 0
 
     for _, row in render_plan.iterrows():
         if max_seconds and (time.monotonic() - t_start) >= max_seconds:
+            break
+        if max_pairs is not None and n_pairs_done >= max_pairs:
             break
 
         ldraw_id = row["ldraw_id"]
@@ -382,9 +390,10 @@ def render_dataset(
             manifest.add((ldraw_id, color_id, i))
 
         n_rendered += len(pending)
+        n_pairs_done += 1
 
     elapsed = time.monotonic() - t_start
-    print(f"Rendered {n_rendered} pairs in {elapsed:.1f}s")
+    print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")
 ```
 
 ## Paths and run configuration
@@ -398,12 +407,14 @@ if platform.system() == "Linux":
     DATA_DIR      = Path("/kaggle/input/klods-syn-data")
     OUTPUT_DIR    = Path("/kaggle/working/dataset")
     N_PER_PAIR    = 20
-    MAX_SECONDS   = None   # run to completion
+    MAX_SECONDS   = 11 * 3600  # hard safety under Kaggle's 12h kill
+    MAX_PAIRS     = None       # set after a calibration run
 else:
     DATA_DIR      = Path("../data")
     OUTPUT_DIR    = DATA_DIR / "dataset_test"
     N_PER_PAIR    = 1
     MAX_SECONDS   = 600    # 10-minute smoke test
+    MAX_PAIRS     = 10     # small calibration batch
 ```
 
 ## Run
@@ -418,6 +429,7 @@ render_dataset(
     spp=64,
     resolution=512,
     max_seconds=MAX_SECONDS,
+    max_pairs=MAX_PAIRS,
 )
 ```
 

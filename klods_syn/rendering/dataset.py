@@ -182,6 +182,7 @@ def render_dataset(
     spp: int = 64,
     resolution: int = 512,
     max_seconds: float | None = None,
+    max_pairs: int | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -202,9 +203,12 @@ def render_dataset(
 
     t_start = time.monotonic()
     n_rendered = 0
+    n_pairs_done = 0
 
     for _, row in render_plan.iterrows():
         if max_seconds and (time.monotonic() - t_start) >= max_seconds:
+            break
+        if max_pairs is not None and n_pairs_done >= max_pairs:
             break
 
         ldraw_id = row["ldraw_id"]
@@ -254,6 +258,7 @@ def render_dataset(
             manifest.add((ldraw_id, color_id, i))
 
         n_rendered += len(pending)
+        n_pairs_done += 1
 
     elapsed = time.monotonic() - t_start
-    print(f"Rendered {n_rendered} pairs in {elapsed:.1f}s")
+    print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")
