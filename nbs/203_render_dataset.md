@@ -71,6 +71,10 @@ if platform.system() == "Linux":
     sys.path.insert(0, str(LDR_TOOLS_DIR))
 
     subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-q", "mitsuba>=3.8.0"],
+        check=True,
+    )
+    subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q", "--force-reinstall", "--no-deps",
          "git+https://github.com/restlessronin/klods-syn.git"],
         check=True,
