@@ -36,7 +36,7 @@ klods_syn = "klods_syn._modidx:d"
 version = { attr = "klods_syn.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["klods_syn"]
+include = ["klods_syn*"]
 
 [tool.nbdev]
 skip_procs = "exec_show_docs"

@@ -403,8 +403,9 @@ local and Kaggle runs. Everything else is the same code.
 
 ```python
 if platform.system() == "Linux":
-    # Kaggle: input datasets mounted under /kaggle/input/
-    DATA_DIR      = Path("/kaggle/input/klods-syn-data")
+    # Kaggle: HDRIs + render_plan.csv come from the attached dataset;
+    # LDraw + Rebrickable CSVs are fetched upstream at session start.
+    DATA_DIR      = Path("/kaggle/working/data")
     OUTPUT_DIR    = Path("/kaggle/working/dataset")
     N_PER_PAIR    = 20
     MAX_SECONDS   = 11 * 3600  # hard safety under Kaggle's 12h kill
@@ -415,6 +416,56 @@ else:
     N_PER_PAIR    = 1
     MAX_SECONDS   = 600    # 10-minute smoke test
     MAX_PAIRS     = 10     # small calibration batch
+```
+
+## Upstream data (Kaggle only)
+
+Kaggle auto-moderation flags LDraw content (LEGO trademark references in
+`.dat` headers), so the LDraw library and Rebrickable CSVs are fetched
+from their upstream sources at session start rather than mirrored in a
+Kaggle dataset. Only HDRIs and `render_plan.csv` come from the attached
+input dataset.
+
+Downloads are idempotent — re-running the cell is a no-op once the
+staging directory is populated.
+
+```python
+if platform.system() == "Linux":
+    import shutil
+    import urllib.request
+    import zipfile
+
+    KAGGLE_INPUT = Path("/kaggle/input/klods-syn-hdri")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    hdri_link = DATA_DIR / "hdri"
+    if not hdri_link.exists():
+        hdri_link.symlink_to(KAGGLE_INPUT / "hdri")
+
+    rebrickable_dir = DATA_DIR / "rebrickable"
+    rebrickable_dir.mkdir(exist_ok=True)
+
+    render_plan_dst = rebrickable_dir / "render_plan.csv"
+    if not render_plan_dst.exists():
+        shutil.copy(KAGGLE_INPUT / "render_plan.csv", render_plan_dst)
+
+    colors_dst = rebrickable_dir / "colors.csv.gz"
+    if not colors_dst.exists():
+        urllib.request.urlretrieve(
+            "https://cdn.rebrickable.com/media/downloads/colors.csv.gz",
+            colors_dst,
+        )
+
+    ldraw_root = DATA_DIR / "ldraw"
+    if not ldraw_root.exists():
+        complete_zip = Path("/tmp/ldraw-complete.zip")
+        urllib.request.urlretrieve(
+            "https://library.ldraw.org/library/updates/complete.zip",
+            complete_zip,
+        )
+        with zipfile.ZipFile(complete_zip) as zf:
+            zf.extractall(DATA_DIR)
 ```
 
 ## Run
