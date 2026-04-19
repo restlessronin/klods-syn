@@ -68,27 +68,31 @@ def parse_ldconfig(path: Path) -> tuple[LDrawColor, ...]:
 
 # %% ../../nbs/202_domain_randomization.ipynb #e3c65966
 import json
+import urllib.parse
 import urllib.request
 
 POLYHAVEN_API = "https://api.polyhaven.com"
 HDRI_DIR_DEFAULT = Path("../data/hdri")
 
 
-def _polyhaven_get(url: str) -> dict:
+def _polyhaven_get(url: str, timeout: float = 30.0) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "klods-syn/0.1"})
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
 
 def fetch_hdri_list(category: str = "all") -> list[str]:
     url = f"{POLYHAVEN_API}/assets?t=hdris"
     if category != "all":
-        url += f"&c={category}"
+        url += f"&c={urllib.parse.quote(category)}"
     return list(_polyhaven_get(url).keys())
 
 
 def download_hdri(
-    name: str, out_dir: Path = HDRI_DIR_DEFAULT, resolution: str = "1k"
+    name: str,
+    out_dir: Path = HDRI_DIR_DEFAULT,
+    resolution: str = "1k",
+    timeout: float = 60.0,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{name}_{resolution}.exr"
@@ -97,7 +101,7 @@ def download_hdri(
     files = _polyhaven_get(f"{POLYHAVEN_API}/files/{name}")
     exr_url = files["hdri"][resolution]["exr"]["url"]
     req = urllib.request.Request(exr_url, headers={"User-Agent": "klods-syn/0.1"})
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         out_path.write_bytes(resp.read())
     return out_path
 
@@ -109,13 +113,17 @@ class HdriQuota:
 
 
 DEFAULT_HDRI_QUOTAS: tuple[HdriQuota, ...] = (
-    HdriQuota("indoor", 20),
-    HdriQuota("studio", 15),
-    HdriQuota("night", 8),
-    HdriQuota("urban", 8),
-    HdriQuota("outdoor", 5),
-    HdriQuota("skies", 3),
-    HdriQuota("sunrise-sunset", 3),
+    HdriQuota("indoor", 300),
+    HdriQuota("studio", 80),
+    HdriQuota("night", 100),
+    HdriQuota("urban", 150),
+    HdriQuota("outdoor", 500),
+    HdriQuota("skies", 100),
+    HdriQuota("sunrise-sunset", 120),
+    HdriQuota("overcast", 80),
+    HdriQuota("low contrast", 80),
+    HdriQuota("nature", 80),
+    HdriQuota("all", 300),
 )
 
 
@@ -150,25 +158,55 @@ class ScoredHdri:
     path: Path
     luminance: float
     dynamic_range: float  # log ratio of 99th to 10th percentile
+    peak_luminance: float  # max pixel value — flags visible sun/lamp hotspots
+    bright_fraction: float  # fraction of pixels with luminance > 1.0
+    near_bright_fraction: float  # fraction of pixels with luminance > 0.7
+    shadow_luminance: float  # 25th percentile — "darkest quartile" brightness
+    ground_luminance: float  # mean of lower half of equirect — flags pure-sky HDRIs
 
 
 def score_hdri(path: Path) -> ScoredHdri:
     img = np.array(mi.Bitmap(str(path)))
     lum = img[:, :, :3] @ [0.2126, 0.7152, 0.0722]
-    p10, p99 = np.percentile(lum, [10, 99])
+    p10, p25, p75, p99 = np.percentile(lum, [10, 25, 75, 99])
     dr = float(np.log1p(p99) - np.log1p(p10))
-    return ScoredHdri(path, float(np.mean(lum)), dr)
+    h = lum.shape[0]
+    return ScoredHdri(
+        path,
+        float(p75),
+        dr,
+        float(lum.max()),
+        float((lum > 1.0).mean()),
+        float((lum > 0.7).mean()),
+        float(p25),
+        float(lum[h // 2:].mean()),
+    )
 
 
 def build_hdri_pool(
-    paths: list[Path], min_luminance: float = 0.1
+    paths: list[Path],
+    min_luminance: float = 0.3,
+    max_peak: float = 100.0,
+    max_bright_fraction: float = 0.08,
+    max_near_bright_fraction: float = 0.2,
+    max_shadow_luminance: float = 0.3,
+    min_ground_luminance: float = 0.04,
 ) -> tuple[list[ScoredHdri], np.ndarray]:
     scored = [score_hdri(p) for p in paths]
-    pool = [s for s in scored if s.luminance >= min_luminance]
+    pool = [
+        s for s in scored
+        if s.luminance >= min_luminance
+        and s.peak_luminance <= max_peak
+        and s.bright_fraction <= max_bright_fraction
+        and s.near_bright_fraction <= max_near_bright_fraction
+        and s.shadow_luminance <= max_shadow_luminance
+        and s.ground_luminance >= min_ground_luminance
+    ]
     if not pool:
         return [], np.array([])
     drs = np.array([s.dynamic_range for s in pool])
-    weights = 1.0 / (1.0 + drs)
+    lums = np.array([s.luminance for s in pool])
+    weights = (lums ** 2) / (1.0 + drs)
     weights /= weights.sum()
     return pool, weights
 
@@ -198,10 +236,10 @@ class RenderConfig:
 
 @dataclass(frozen=True)
 class RandomizationSpace:
-    platform_radius: float = 30.0
+    platform_radius: float = 100.0
     roughness_range: tuple[float, float] = (0.15, 0.45)
     ior_range: tuple[float, float] = (1.48, 1.58)
-    hdri_intensity_range: tuple[float, float] = (1.0, 3.0)
+    hdri_intensity_range: tuple[float, float] = (0.7, 1.5)
     fill_intensity_range: tuple[float, float] = (0.5, 2.0)
     fill_temp_range: tuple[float, float] = (3000.0, 8000.0)
     noise_sigma_range: tuple[float, float] = (0.0, 0.02)
@@ -217,10 +255,12 @@ class RandomizationSpace:
         hdri_weights: np.ndarray,
         color_table: tuple[LDrawColor, ...] = (),
         color: LDrawColor | None = None,
+        max_translation: float | None = None,
     ) -> RenderConfig:
         part_rotation = Rotation.random(random_state=rng.integers(2**31)).as_rotvec()
         angle = rng.uniform(0, 2 * np.pi)
-        radius = self.platform_radius * np.sqrt(rng.uniform())
+        max_r = self.platform_radius if max_translation is None else max(0.0, max_translation)
+        radius = max_r * np.sqrt(rng.uniform())
         part_translation = (
             float(radius * np.cos(angle)),
             0.0,
@@ -290,6 +330,13 @@ def _temp_to_rgb(temp_k: float) -> Vec3:
     return (float(r), float(g), float(b))
 
 
+def _diffuse_bsdf(color: "LDrawColor") -> dict:
+    return {
+        "type": "diffuse",
+        "reflectance": {"type": "rgb", "value": list(color.rgb)},
+    }
+
+
 def make_bsdf(cfg: RenderConfig) -> dict:
     c = cfg.color
     if c.material == "transparent":
@@ -333,6 +380,9 @@ def build_scene(
     spp: int = 128,
     mask_mode: bool = False,
 ) -> dict:
+    bsdf_dict = _diffuse_bsdf(cfg.color) if mask_mode else make_bsdf(cfg)
+    mesh.set_bsdf(mi.load_dict(bsdf_dict))
+
     scene = {
         "type": "scene",
         "integrator": {
@@ -426,7 +476,7 @@ import io
 
 
 # | export
-def compute_exposure(masks: list[np.ndarray], percentile: float = 99) -> float:
+def compute_exposure(masks: list[np.ndarray], percentile: float = 90) -> float:
     brick_pixels = np.concatenate([m[:, :, :3][m[:, :, 3] > 0.5] for m in masks])
     return (
         float(np.percentile(brick_pixels, percentile)) if brick_pixels.size > 0 else 1.0

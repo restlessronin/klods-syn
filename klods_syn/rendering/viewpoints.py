@@ -110,7 +110,7 @@ class TriMirrorRig:
 
     @staticmethod
     def optimize(
-        camera_dist: float = 250.0,
+        camera_dist: float = 380.0,
         r_bounds: tuple[float, float] = (20.0, 300.0),
         h_bounds: tuple[float, float] = (10.0, 200.0),
     ) -> "TriMirrorRig":
