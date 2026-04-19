@@ -14,10 +14,12 @@ jupyter:
 
 # Dataset Rendering
 
-Orchestration layer: render the full working subset to disk as a
-labeled image dataset. Reads `render_plan.csv` from the catalog pipeline,
-renders each (part, color) pair `n_per_pair` times across 4 viewpoints,
-and writes images + `labels.csv` to an output directory.
+Orchestration layer: render the working-subset parts to disk as a
+labeled image dataset. Reads `render_plan.csv` from the catalog pipeline
+as a per-part color distribution, then for each part renders
+`n_per_part` samples across 4 viewpoints — the color for each render is
+drawn from that part's real-world color distribution, not pinned per
+class. The class label is `ldraw_id`; color is a randomization axis.
 
 A manifest tracks completed renders so interrupted runs can resume
 without re-rendering.
@@ -177,25 +179,27 @@ def ldraw_color_from_rebrickable(
 
 ## Manifest
 
-Tracks completed `(ldraw_id, color_id, render_idx)` triples so runs can
-resume after interruption. Written to `manifest.csv` in the output directory.
+Tracks completed `(ldraw_id, render_idx)` pairs so runs can resume
+after interruption. Written to `manifest.csv` in the output directory.
+Color is not part of the key — it's sampled per-render from the part's
+distribution and recorded in `labels.csv`.
 
 ```python
 # | export
-def load_manifest(output_dir: Path) -> set[tuple[str, int, int]]:
+def load_manifest(output_dir: Path) -> set[tuple[str, int]]:
     path = output_dir / "manifest.csv"
     if not path.exists():
         return set()
     df = pd.read_csv(path)
-    return set(zip(df["ldraw_id"], df["color_id"], df["render_idx"]))
+    return set(zip(df["ldraw_id"], df["render_idx"]))
 
 
 def update_manifest(
-    output_dir: Path, ldraw_id: str, color_id: int, render_idx: int
+    output_dir: Path, ldraw_id: str, render_idx: int
 ) -> None:
     path = output_dir / "manifest.csv"
     row = pd.DataFrame(
-        [{"ldraw_id": ldraw_id, "color_id": color_id, "render_idx": render_idx}]
+        [{"ldraw_id": ldraw_id, "render_idx": render_idx}]
     )
     row.to_csv(path, mode="a", header=not path.exists(), index=False)
 ```
@@ -363,11 +367,13 @@ def render_raw(
     ))))
 ```
 
-## Render pair
+## Render part
 
-Render one (part, color) pair `n_renders` times. Each render produces
-4 images (1 direct + 3 mirror views). Images are saved as PNGs and
-a list of label rows is returned.
+Render one part `n_renders` times. For each render the color is sampled
+from the part's real-world color distribution (weighted by `total_qty`),
+so a single part's renders cover many colors. Each render produces 4
+images (1 direct + 3 mirror views). Images are saved as PNGs and a list
+of label rows is returned.
 
 Production renders use a uniform `spp=2048`. An `scripts/spp_sweep.py`
 sweep showed that caustics and specular highlights on transparent and
@@ -379,9 +385,10 @@ keep a single `spp` arg rather than branching on `color.material`.
 
 ```python
 # | export
-def render_pair(
+def render_part(
     ldraw_id: str,
-    color: LDrawColor,
+    color_dist: pd.DataFrame,
+    colors_lookup: pd.DataFrame,
     vertices: np.ndarray,
     faces: np.ndarray,
     render_idxs: list[int],
@@ -399,8 +406,17 @@ def render_pair(
     label_rows = []
 
     max_translation = part_max_translation(vertices, space.platform_radius)
+    color_weights = color_dist["total_qty"].to_numpy(dtype=float)
+    color_weights /= color_weights.sum()
 
     for render_idx in render_idxs:
+        color_row = color_dist.iloc[rng.choice(len(color_dist), p=color_weights)]
+        color_id = int(color_row["color_id"])
+        rgb_hex = colors_lookup.loc[color_id, "rgb"]
+        color = ldraw_color_from_rebrickable(
+            color_id, color_row["color_name"], color_row["material"], rgb_hex
+        )
+
         cfg = space.sample(
             rng, hdri_pool, hdri_weights,
             color=color, max_translation=max_translation,
@@ -428,20 +444,23 @@ def render_pair(
 
 ## Dataset orchestration
 
-Main entry point. Iterates the render plan, skips completed pairs via
-the manifest, and appends to `labels.csv` incrementally so partial runs
-are immediately usable.
+Main entry point. Aggregates the render plan by part, iterates parts in
+descending `total_qty` order, skips completed renders via the manifest,
+and appends to `labels.csv` incrementally so partial runs are
+immediately usable.
 
-`n_per_pair` is the primary lever for test vs production runs:
-a small value (1–5) enables a quick smoke-test; the full dataset
-uses whatever N was decided for training.
+`n_per_part` is the primary lever for test vs production runs: a small
+value (1–5) enables a quick smoke-test; the full dataset uses whatever
+N was decided for training. Color is sampled fresh per render from the
+part's real-world color distribution, so `n_per_part` renders of a
+single part cover many colors rather than pinning one.
 
-`max_seconds` and `max_pairs` are stopping conditions for bounded runs;
-the loop exits cleanly after the current pair finishes when either
-fires. `max_pairs` counts pairs with actual work done (skipped pairs
-from the manifest don't count), so it's a predictable unit of work for
-session batching. `max_seconds` is useful as a hard safety bound under
-Kaggle's session-kill.
+`top_n_parts` restricts the iteration to the N most-common parts (by
+summed `total_qty`), for quick evaluation runs before committing to the
+full catalog. `max_seconds` and `max_parts` are stopping conditions;
+the loop exits cleanly after the current part finishes when either
+fires. `max_parts` counts parts with actual work done (parts already
+fully in the manifest don't count).
 
 ```python
 # | export
@@ -450,18 +469,30 @@ def render_dataset(
     output_dir: Path,
     ldraw_dir: Path,
     rebrickable_dir: Path,
-    n_per_pair: int = 20,
+    n_per_part: int = 20,
     spp: int = 2048,
     resolution: int = 512,
     max_seconds: float | None = None,
-    max_pairs: int | None = None,
+    max_parts: int | None = None,
+    top_n_parts: int | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = rebrickable_dir.parent
     ctx = RenderContext.load(data_dir, ldraw_dir=ldraw_dir)
-    render_plan = pd.read_csv(render_plan_path)
+    color_dist_df = pd.read_csv(render_plan_path)
+    color_dist_df["ldraw_id"] = color_dist_df["ldraw_id"].astype(str)
     rng = np.random.default_rng(42)
+
+    part_qty = (
+        color_dist_df.groupby("ldraw_id")["total_qty"].sum()
+        .sort_values(ascending=False)
+    )
+    if top_n_parts is not None:
+        part_qty = part_qty.head(top_n_parts)
+    part_color_dists = {
+        pid: group for pid, group in color_dist_df.groupby("ldraw_id")
+    }
 
     manifest = load_manifest(output_dir)
     labels_path = output_dir / "labels.csv"
@@ -469,20 +500,17 @@ def render_dataset(
 
     t_start = time.monotonic()
     n_rendered = 0
-    n_pairs_done = 0
+    n_parts_done = 0
 
-    for _, row in render_plan.iterrows():
+    for ldraw_id in part_qty.index:
         if max_seconds and (time.monotonic() - t_start) >= max_seconds:
             break
-        if max_pairs is not None and n_pairs_done >= max_pairs:
+        if max_parts is not None and n_parts_done >= max_parts:
             break
 
-        ldraw_id = row["ldraw_id"]
-        color_id = int(row["color_id"])
-
         pending = [
-            i for i in range(n_per_pair)
-            if (ldraw_id, color_id, i) not in manifest
+            i for i in range(n_per_part)
+            if (ldraw_id, i) not in manifest
         ]
         if not pending:
             continue
@@ -493,15 +521,11 @@ def render_dataset(
             print(f"Skipping {ldraw_id}: {e}")
             continue
 
-        rgb_hex = ctx.colors_df.loc[color_id, "rgb"]
-        color = ldraw_color_from_rebrickable(
-            color_id, row["color_name"], row["material"], rgb_hex
-        )
-
-        t_pair_start = time.monotonic()
-        label_rows = render_pair(
+        t_part_start = time.monotonic()
+        label_rows = render_part(
             ldraw_id=ldraw_id,
-            color=color,
+            color_dist=part_color_dists[ldraw_id],
+            colors_lookup=ctx.colors_df,
             vertices=vertices,
             faces=faces,
             render_idxs=pending,
@@ -514,7 +538,7 @@ def render_dataset(
             spp=spp,
             resolution=resolution,
         )
-        pair_elapsed = time.monotonic() - t_pair_start
+        part_elapsed = time.monotonic() - t_part_start
 
         pd.DataFrame(label_rows).to_csv(
             labels_path, mode="a", header=labels_header, index=False
@@ -522,18 +546,18 @@ def render_dataset(
         labels_header = False
 
         for i in pending:
-            update_manifest(output_dir, ldraw_id, color_id, i)
-            manifest.add((ldraw_id, color_id, i))
+            update_manifest(output_dir, ldraw_id, i)
+            manifest.add((ldraw_id, i))
 
         n_rendered += len(pending)
-        n_pairs_done += 1
+        n_parts_done += 1
         print(
-            f"pair {n_pairs_done}: {ldraw_id}/{color_id} "
-            f"{pair_elapsed:.1f}s ({len(pending)} renders)"
+            f"part {n_parts_done}: {ldraw_id} "
+            f"{part_elapsed:.1f}s ({len(pending)} renders)"
         )
 
     elapsed = time.monotonic() - t_start
-    print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")
+    print(f"Rendered {n_rendered} renders ({n_parts_done} parts) in {elapsed:.1f}s")
 ```
 
 ## Paths and run configuration
@@ -547,15 +571,17 @@ if platform.system() == "Linux":
     # LDraw + Rebrickable CSVs are fetched upstream at session start.
     DATA_DIR      = Path("/kaggle/working/data")
     OUTPUT_DIR    = Path("/kaggle/working/dataset")
-    N_PER_PAIR    = 20
+    N_PER_PART    = 20
     MAX_SECONDS   = 11 * 3600  # hard safety under Kaggle's 12h kill
-    MAX_PAIRS     = 10         # calibration: measure pairs/hr at spp=2048
+    MAX_PARTS     = None       # set after eval run decides full catalog
+    TOP_N_PARTS   = 100        # eval baseline: top parts by total_qty
 else:
     DATA_DIR      = Path("../data")
     OUTPUT_DIR    = DATA_DIR / "dataset_test"
-    N_PER_PAIR    = 1
+    N_PER_PART    = 1
     MAX_SECONDS   = 600    # 10-minute smoke test
-    MAX_PAIRS     = 10     # small calibration batch
+    MAX_PARTS     = 10     # small calibration batch
+    TOP_N_PARTS   = None
 ```
 
 ## Upstream data (Kaggle only)
@@ -618,16 +644,17 @@ render_dataset(
     output_dir=OUTPUT_DIR,
     ldraw_dir=DATA_DIR / "ldraw",
     rebrickable_dir=DATA_DIR / "rebrickable",
-    n_per_pair=N_PER_PAIR,
+    n_per_part=N_PER_PART,
     spp=2048,
     resolution=512,
     max_seconds=MAX_SECONDS,
-    max_pairs=MAX_PAIRS,
+    max_parts=MAX_PARTS,
+    top_n_parts=TOP_N_PARTS,
 )
 ```
 
 ```python
-labels = pd.read_csv(DATA_DIR / "dataset_test" / "labels.csv")
+labels = pd.read_csv(OUTPUT_DIR / "labels.csv")
 print(f"Images rendered: {len(labels):,}")
 print(f"Unique parts:    {labels['ldraw_id'].nunique():,}")
 print(f"Unique colors:   {labels['color_id'].nunique():,}")

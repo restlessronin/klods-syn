@@ -3,7 +3,7 @@
 # %% auto #0
 __all__ = ['VARIANT', 'DEFAULT_CAMERA_DIST', 'DEFAULT_FOV', 'load_part_mesh', 'ldraw_color_from_rebrickable', 'load_manifest',
            'update_manifest', 'RenderContext', 'part_max_translation', 'sample_cfg', 'exposure_for', 'render_views',
-           'render_raw', 'render_pair', 'render_dataset']
+           'render_raw', 'render_part', 'render_dataset']
 
 # %% ../../nbs/203_render_dataset.ipynb #e00b3b97
 import time
@@ -74,20 +74,20 @@ def ldraw_color_from_rebrickable(
     )
 
 # %% ../../nbs/203_render_dataset.ipynb #e713b063
-def load_manifest(output_dir: Path) -> set[tuple[str, int, int]]:
+def load_manifest(output_dir: Path) -> set[tuple[str, int]]:
     path = output_dir / "manifest.csv"
     if not path.exists():
         return set()
     df = pd.read_csv(path)
-    return set(zip(df["ldraw_id"], df["color_id"], df["render_idx"]))
+    return set(zip(df["ldraw_id"], df["render_idx"]))
 
 
 def update_manifest(
-    output_dir: Path, ldraw_id: str, color_id: int, render_idx: int
+    output_dir: Path, ldraw_id: str, render_idx: int
 ) -> None:
     path = output_dir / "manifest.csv"
     row = pd.DataFrame(
-        [{"ldraw_id": ldraw_id, "color_id": color_id, "render_idx": render_idx}]
+        [{"ldraw_id": ldraw_id, "render_idx": render_idx}]
     )
     row.to_csv(path, mode="a", header=not path.exists(), index=False)
 
@@ -247,9 +247,10 @@ def render_raw(
     ))))
 
 # %% ../../nbs/203_render_dataset.ipynb #72582fac
-def render_pair(
+def render_part(
     ldraw_id: str,
-    color: LDrawColor,
+    color_dist: pd.DataFrame,
+    colors_lookup: pd.DataFrame,
     vertices: np.ndarray,
     faces: np.ndarray,
     render_idxs: list[int],
@@ -267,8 +268,17 @@ def render_pair(
     label_rows = []
 
     max_translation = part_max_translation(vertices, space.platform_radius)
+    color_weights = color_dist["total_qty"].to_numpy(dtype=float)
+    color_weights /= color_weights.sum()
 
     for render_idx in render_idxs:
+        color_row = color_dist.iloc[rng.choice(len(color_dist), p=color_weights)]
+        color_id = int(color_row["color_id"])
+        rgb_hex = colors_lookup.loc[color_id, "rgb"]
+        color = ldraw_color_from_rebrickable(
+            color_id, color_row["color_name"], color_row["material"], rgb_hex
+        )
+
         cfg = space.sample(
             rng, hdri_pool, hdri_weights,
             color=color, max_translation=max_translation,
@@ -299,18 +309,30 @@ def render_dataset(
     output_dir: Path,
     ldraw_dir: Path,
     rebrickable_dir: Path,
-    n_per_pair: int = 20,
+    n_per_part: int = 20,
     spp: int = 2048,
     resolution: int = 512,
     max_seconds: float | None = None,
-    max_pairs: int | None = None,
+    max_parts: int | None = None,
+    top_n_parts: int | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = rebrickable_dir.parent
     ctx = RenderContext.load(data_dir, ldraw_dir=ldraw_dir)
-    render_plan = pd.read_csv(render_plan_path)
+    color_dist_df = pd.read_csv(render_plan_path)
+    color_dist_df["ldraw_id"] = color_dist_df["ldraw_id"].astype(str)
     rng = np.random.default_rng(42)
+
+    part_qty = (
+        color_dist_df.groupby("ldraw_id")["total_qty"].sum()
+        .sort_values(ascending=False)
+    )
+    if top_n_parts is not None:
+        part_qty = part_qty.head(top_n_parts)
+    part_color_dists = {
+        pid: group for pid, group in color_dist_df.groupby("ldraw_id")
+    }
 
     manifest = load_manifest(output_dir)
     labels_path = output_dir / "labels.csv"
@@ -318,20 +340,17 @@ def render_dataset(
 
     t_start = time.monotonic()
     n_rendered = 0
-    n_pairs_done = 0
+    n_parts_done = 0
 
-    for _, row in render_plan.iterrows():
+    for ldraw_id in part_qty.index:
         if max_seconds and (time.monotonic() - t_start) >= max_seconds:
             break
-        if max_pairs is not None and n_pairs_done >= max_pairs:
+        if max_parts is not None and n_parts_done >= max_parts:
             break
 
-        ldraw_id = row["ldraw_id"]
-        color_id = int(row["color_id"])
-
         pending = [
-            i for i in range(n_per_pair)
-            if (ldraw_id, color_id, i) not in manifest
+            i for i in range(n_per_part)
+            if (ldraw_id, i) not in manifest
         ]
         if not pending:
             continue
@@ -342,15 +361,11 @@ def render_dataset(
             print(f"Skipping {ldraw_id}: {e}")
             continue
 
-        rgb_hex = ctx.colors_df.loc[color_id, "rgb"]
-        color = ldraw_color_from_rebrickable(
-            color_id, row["color_name"], row["material"], rgb_hex
-        )
-
-        t_pair_start = time.monotonic()
-        label_rows = render_pair(
+        t_part_start = time.monotonic()
+        label_rows = render_part(
             ldraw_id=ldraw_id,
-            color=color,
+            color_dist=part_color_dists[ldraw_id],
+            colors_lookup=ctx.colors_df,
             vertices=vertices,
             faces=faces,
             render_idxs=pending,
@@ -363,7 +378,7 @@ def render_dataset(
             spp=spp,
             resolution=resolution,
         )
-        pair_elapsed = time.monotonic() - t_pair_start
+        part_elapsed = time.monotonic() - t_part_start
 
         pd.DataFrame(label_rows).to_csv(
             labels_path, mode="a", header=labels_header, index=False
@@ -371,15 +386,15 @@ def render_dataset(
         labels_header = False
 
         for i in pending:
-            update_manifest(output_dir, ldraw_id, color_id, i)
-            manifest.add((ldraw_id, color_id, i))
+            update_manifest(output_dir, ldraw_id, i)
+            manifest.add((ldraw_id, i))
 
         n_rendered += len(pending)
-        n_pairs_done += 1
+        n_parts_done += 1
         print(
-            f"pair {n_pairs_done}: {ldraw_id}/{color_id} "
-            f"{pair_elapsed:.1f}s ({len(pending)} renders)"
+            f"part {n_parts_done}: {ldraw_id} "
+            f"{part_elapsed:.1f}s ({len(pending)} renders)"
         )
 
     elapsed = time.monotonic() - t_start
-    print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")
+    print(f"Rendered {n_rendered} renders ({n_parts_done} parts) in {elapsed:.1f}s")
