@@ -300,7 +300,7 @@ def render_dataset(
     ldraw_dir: Path,
     rebrickable_dir: Path,
     n_per_pair: int = 20,
-    spp: int = 64,
+    spp: int = 2048,
     resolution: int = 512,
     max_seconds: float | None = None,
     max_pairs: int | None = None,
@@ -347,6 +347,7 @@ def render_dataset(
             color_id, row["color_name"], row["material"], rgb_hex
         )
 
+        t_pair_start = time.monotonic()
         label_rows = render_pair(
             ldraw_id=ldraw_id,
             color=color,
@@ -362,6 +363,7 @@ def render_dataset(
             spp=spp,
             resolution=resolution,
         )
+        pair_elapsed = time.monotonic() - t_pair_start
 
         pd.DataFrame(label_rows).to_csv(
             labels_path, mode="a", header=labels_header, index=False
@@ -374,6 +376,10 @@ def render_dataset(
 
         n_rendered += len(pending)
         n_pairs_done += 1
+        print(
+            f"pair {n_pairs_done}: {ldraw_id}/{color_id} "
+            f"{pair_elapsed:.1f}s ({len(pending)} renders)"
+        )
 
     elapsed = time.monotonic() - t_start
     print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")

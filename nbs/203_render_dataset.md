@@ -498,6 +498,7 @@ def render_dataset(
             color_id, row["color_name"], row["material"], rgb_hex
         )
 
+        t_pair_start = time.monotonic()
         label_rows = render_pair(
             ldraw_id=ldraw_id,
             color=color,
@@ -513,6 +514,7 @@ def render_dataset(
             spp=spp,
             resolution=resolution,
         )
+        pair_elapsed = time.monotonic() - t_pair_start
 
         pd.DataFrame(label_rows).to_csv(
             labels_path, mode="a", header=labels_header, index=False
@@ -525,6 +527,10 @@ def render_dataset(
 
         n_rendered += len(pending)
         n_pairs_done += 1
+        print(
+            f"pair {n_pairs_done}: {ldraw_id}/{color_id} "
+            f"{pair_elapsed:.1f}s ({len(pending)} renders)"
+        )
 
     elapsed = time.monotonic() - t_start
     print(f"Rendered {n_rendered} renders ({n_pairs_done} pairs) in {elapsed:.1f}s")
@@ -543,7 +549,7 @@ if platform.system() == "Linux":
     OUTPUT_DIR    = Path("/kaggle/working/dataset")
     N_PER_PAIR    = 20
     MAX_SECONDS   = 11 * 3600  # hard safety under Kaggle's 12h kill
-    MAX_PAIRS     = None       # set after a calibration run
+    MAX_PAIRS     = 10         # calibration: measure pairs/hr at spp=2048
 else:
     DATA_DIR      = Path("../data")
     OUTPUT_DIR    = DATA_DIR / "dataset_test"
