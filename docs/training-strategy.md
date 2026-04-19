@@ -231,6 +231,25 @@ is a valid and expected outcome, because the fusion resolves ambiguities
 that are genuinely unresolvable from one angle. The production metric is
 always 4-view retrieval on real scanner data.
 
+### 9. Render quality — uniform 2048 SPP
+
+**Decision:** Render all training images at `spp=2048`, regardless of
+`color.material`. Do not branch SPP by material class.
+
+**Evidence:**
+
+- `scripts/spp_sweep.py` shows caustics and specular highlights on
+  transparent and chrome colors plateau by ~256 SPP — additional
+  samples do not reduce visible noise for those materials.
+- Solid and metallic surfaces continue to show speckle on brick faces
+  below 2048 SPP.
+
+**Rationale:** In principle transparent parts could render at 256 SPP
+to save budget. In practice, non-solid colors are a small share of the
+dataset, and a single uniform `spp` keeps `render_pair` simple and the
+per-image cost predictable. If the non-solid share grows or the render
+budget tightens, dispatching transparent at 256 is the obvious lever.
+
 ---
 
 ## Reference Database

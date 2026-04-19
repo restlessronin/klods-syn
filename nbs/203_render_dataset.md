@@ -369,6 +369,14 @@ Render one (part, color) pair `n_renders` times. Each render produces
 4 images (1 direct + 3 mirror views). Images are saved as PNGs and
 a list of label rows is returned.
 
+Production renders use a uniform `spp=2048`. An `scripts/spp_sweep.py`
+sweep showed that caustics and specular highlights on transparent and
+chrome materials stop converging meaningfully past ~256 SPP, while
+solid and metallic surfaces still show speckle below 2048. In
+principle transparent could be dispatched at 256 to save render
+budget, but non-solid colors are a small share of the dataset, so we
+keep a single `spp` arg rather than branching on `color.material`.
+
 ```python
 # | export
 def render_pair(
@@ -443,7 +451,7 @@ def render_dataset(
     ldraw_dir: Path,
     rebrickable_dir: Path,
     n_per_pair: int = 20,
-    spp: int = 64,
+    spp: int = 2048,
     resolution: int = 512,
     max_seconds: float | None = None,
     max_pairs: int | None = None,
@@ -605,7 +613,7 @@ render_dataset(
     ldraw_dir=DATA_DIR / "ldraw",
     rebrickable_dir=DATA_DIR / "rebrickable",
     n_per_pair=N_PER_PAIR,
-    spp=64,
+    spp=2048,
     resolution=512,
     max_seconds=MAX_SECONDS,
     max_pairs=MAX_PAIRS,
