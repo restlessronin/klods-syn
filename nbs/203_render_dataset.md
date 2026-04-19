@@ -210,11 +210,11 @@ composable — callers assemble them to cover their specific loop shape.
 # | export
 from dataclasses import dataclass, replace as dc_replace
 
+from klods_syn.assets.hdris import build_hdri_pool
 from klods_syn.rendering.domain_randomization import (
     RandomizationSpace,
     RenderConfig,
     build_scene,
-    build_hdri_pool,
     compute_exposure,
     postprocess,
     transform_mesh,

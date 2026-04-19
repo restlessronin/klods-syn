@@ -94,11 +94,11 @@ def update_manifest(
 # %% ../../nbs/203_render_dataset.ipynb #e6a65ba8
 from dataclasses import dataclass, replace as dc_replace
 
+from ..assets.hdris import build_hdri_pool
 from klods_syn.rendering.domain_randomization import (
     RandomizationSpace,
     RenderConfig,
     build_scene,
-    build_hdri_pool,
     compute_exposure,
     postprocess,
     transform_mesh,

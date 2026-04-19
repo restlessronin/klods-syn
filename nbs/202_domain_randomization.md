@@ -106,196 +106,30 @@ for mat, cs in sorted(by_material.items()):
     print(f"  {mat}: {len(cs)}")
 ```
 
-## HDRI environment maps
+## HDRI pool
 
-[Poly Haven](https://polyhaven.com/) provides CC0 HDRIs via a public API.
-We fetch 1K resolution maps (~1–6MB each) and cache them locally.
-
-Category quotas bias toward low dynamic range environments (indoor,
-studio) that are closer to the scanner's operating conditions, while
-keeping some high-DR outdoor scenes for robustness.
-
-API: `https://api.polyhaven.com` — requires a `User-Agent` header.
-All requests require unique User-Agent per [API terms](https://polyhaven.com/our-api).
+HDRI acquisition, scoring, and filtering live in `nbs/001_hdris.md` /
+`klods_syn.assets.hdris`. This notebook just consumes a pre-built pool:
+`ScoredHdri` is the record type used in `RandomizationSpace.sample` for
+weighted HDRI selection.
 
 ```python
 # | export
-import json
-import urllib.parse
-import urllib.request
+from klods_syn.assets.hdris import ScoredHdri
 
-POLYHAVEN_API = "https://api.polyhaven.com"
-HDRI_DIR_DEFAULT = Path("../data/hdri")
-
-
-def _polyhaven_get(url: str, timeout: float = 30.0) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "klods-syn/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read())
-
-
-def fetch_hdri_list(category: str = "all") -> list[str]:
-    url = f"{POLYHAVEN_API}/assets?t=hdris"
-    if category != "all":
-        url += f"&c={urllib.parse.quote(category)}"
-    return list(_polyhaven_get(url).keys())
-
-
-def download_hdri(
-    name: str,
-    out_dir: Path = HDRI_DIR_DEFAULT,
-    resolution: str = "1k",
-    timeout: float = 60.0,
-) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{name}_{resolution}.exr"
-    if out_path.exists():
-        return out_path
-    files = _polyhaven_get(f"{POLYHAVEN_API}/files/{name}")
-    exr_url = files["hdri"][resolution]["exr"]["url"]
-    req = urllib.request.Request(exr_url, headers={"User-Agent": "klods-syn/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        out_path.write_bytes(resp.read())
-    return out_path
-
-
-@dataclass(frozen=True)
-class HdriQuota:
-    category: str
-    count: int
-
-
-DEFAULT_HDRI_QUOTAS: tuple[HdriQuota, ...] = (
-    HdriQuota("indoor", 300),
-    HdriQuota("studio", 80),
-    HdriQuota("night", 100),
-    HdriQuota("urban", 150),
-    HdriQuota("outdoor", 500),
-    HdriQuota("skies", 100),
-    HdriQuota("sunrise-sunset", 120),
-    HdriQuota("overcast", 80),
-    HdriQuota("low contrast", 80),
-    HdriQuota("nature", 80),
-    HdriQuota("all", 300),
-)
-
-
-def ensure_hdris(
-    quotas: tuple[HdriQuota, ...] = DEFAULT_HDRI_QUOTAS,
-    out_dir: Path = HDRI_DIR_DEFAULT,
-    resolution: str = "1k",
-) -> list[Path]:
-    rng = np.random.default_rng(42)
-    seen: set[str] = set()
-    paths: list[Path] = []
-
-    for quota in quotas:
-        names = [n for n in fetch_hdri_list(quota.category) if n not in seen]
-        selected = (
-            rng.choice(names, size=min(quota.count, len(names)), replace=False)
-            if names
-            else []
-        )
-        for name in selected:
-            seen.add(name)
-            try:
-                paths.append(download_hdri(name, out_dir, resolution))
-            except Exception as e:
-                print(f"Skipping {name}: {e}")
-
-    return paths
-```
-
-```python
-hdri_paths_raw = ensure_hdris()
-print(f"HDRIs downloaded: {len(hdri_paths_raw)}")
-```
-
-## Mitsuba setup
-
-Variant must be set before any Mitsuba type annotations or
-`mi.Bitmap` calls are evaluated.
-
-```python
 import mitsuba as mi
+```
 
+```python
 mi.set_variant("scalar_rgb")
 ```
 
-## HDRI scoring and weighted pool
-
-Score each HDRI by dynamic range (log ratio of bright to dark
-percentiles). Build a sampling pool with inverse-DR weighting
-so low dynamic range environments dominate the training
-distribution while high-DR scenes still appear for robustness.
-
 ```python
-# | export
-@dataclass(frozen=True)
-class ScoredHdri:
-    path: Path
-    luminance: float
-    dynamic_range: float  # log ratio of 99th to 10th percentile
-    peak_luminance: float  # max pixel value — flags visible sun/lamp hotspots
-    bright_fraction: float  # fraction of pixels with luminance > 1.0
-    near_bright_fraction: float  # fraction of pixels with luminance > 0.7
-    shadow_luminance: float  # 25th percentile — "darkest quartile" brightness
-    ground_luminance: float  # mean of lower half of equirect — flags pure-sky HDRIs
+from klods_syn.assets.hdris import build_hdri_pool
 
-
-def score_hdri(path: Path) -> ScoredHdri:
-    img = np.array(mi.Bitmap(str(path)))
-    lum = img[:, :, :3] @ [0.2126, 0.7152, 0.0722]
-    p10, p25, p75, p99 = np.percentile(lum, [10, 25, 75, 99])
-    dr = float(np.log1p(p99) - np.log1p(p10))
-    h = lum.shape[0]
-    return ScoredHdri(
-        path,
-        float(p75),
-        dr,
-        float(lum.max()),
-        float((lum > 1.0).mean()),
-        float((lum > 0.7).mean()),
-        float(p25),
-        float(lum[h // 2:].mean()),
-    )
-
-
-def build_hdri_pool(
-    paths: list[Path],
-    min_luminance: float = 0.3,
-    max_peak: float = 100.0,
-    max_bright_fraction: float = 0.08,
-    max_near_bright_fraction: float = 0.2,
-    max_shadow_luminance: float = 0.3,
-    min_ground_luminance: float = 0.04,
-) -> tuple[list[ScoredHdri], np.ndarray]:
-    scored = [score_hdri(p) for p in paths]
-    pool = [
-        s for s in scored
-        if s.luminance >= min_luminance
-        and s.peak_luminance <= max_peak
-        and s.bright_fraction <= max_bright_fraction
-        and s.near_bright_fraction <= max_near_bright_fraction
-        and s.shadow_luminance <= max_shadow_luminance
-        and s.ground_luminance >= min_ground_luminance
-    ]
-    if not pool:
-        return [], np.array([])
-    drs = np.array([s.dynamic_range for s in pool])
-    lums = np.array([s.luminance for s in pool])
-    weights = (lums ** 2) / (1.0 + drs)
-    weights /= weights.sum()
-    return pool, weights
-```
-
-```python
-hdri_pool, hdri_weights = build_hdri_pool(hdri_paths_raw)
-print(f"HDRIs in pool: {len(hdri_pool)}")
-for s in sorted(hdri_pool, key=lambda s: s.dynamic_range):
-    print(
-        f"  {s.path.stem}: DR={s.dynamic_range:.2f} lum={s.luminance:.3f} weight={hdri_weights[hdri_pool.index(s)]:.3f}"
-    )
+hdri_paths = sorted(Path("../data/hdri").glob("*.exr"))
+hdri_pool, hdri_weights = build_hdri_pool(hdri_paths)
+print(f"HDRIs: {len(hdri_paths)} on disk, {len(hdri_pool)} passed filters")
 ```
 
 ## Randomization space
